@@ -1,7 +1,7 @@
-base_run_dir: /home/dmercado/Documents/hydro_forecast_catalonia/external/flood-forecasting/pretrained-models/google-floodhub-settings-55-epochs-nse-filtered-0.5-85-epochs
+base_run_dir: /home/dmercado/Documents/hydro_forecast_spain/external/flood-forecasting/pretrained-models/google-floodhub-settings-55-epochs-nse-filtered-0.5-85-epochs
 batch_size: 128
 device: cuda:0
-dynamics_data_dir: /home/dmercado/Documents/hydro_forecast_catalonia/data/processed/google/dynamics
+dynamics_data_dir: /home/dmercado/Documents/hydro_forecast_spain/data/processed/google/dynamics
 epochs: 15
 experiment_name: finetuned
 finetune_modules:
@@ -12,7 +12,7 @@ finetune_modules:
 - hindcast_lstm
 - forecast_lstm
 - head
-img_log_dir: /home/dmercado/Documents/hydro_forecast_catalonia/data/processed/google/runs/finetuned/img_log
+img_log_dir: /home/dmercado/Documents/hydro_forecast_spain/data/processed/google/runs/finetuned/img_log
 initial_learning_rate: 0.0001
 learning_rate_strategy: ConstantLR
 max_updates_per_epoch: 500
@@ -21,17 +21,17 @@ metrics:
 - KGE
 n_samples: 100
 num_workers: 0
-run_dir: /home/dmercado/Documents/hydro_forecast_catalonia/data/processed/google/runs/finetuned
+run_dir: /home/dmercado/Documents/hydro_forecast_spain/data/processed/google/runs/finetuned
 save_validation_results: false
-statics_data_dir: /home/dmercado/Documents/hydro_forecast_catalonia/data/processed/google/statics
-targets_data_dir: /home/dmercado/Documents/hydro_forecast_catalonia/data/processed/google/statics
-test_basin_file: /home/dmercado/Documents/hydro_forecast_catalonia/data/processed/google/basins.txt
-train_basin_file: /home/dmercado/Documents/hydro_forecast_catalonia/data/processed/google/basins.txt
-train_dir: /home/dmercado/Documents/hydro_forecast_catalonia/data/processed/google/runs/finetuned/train_data
+statics_data_dir: /home/dmercado/Documents/hydro_forecast_spain/data/processed/google/statics
+targets_data_dir: /home/dmercado/Documents/hydro_forecast_spain/data/processed/google/statics
+test_basin_file: /home/dmercado/Documents/hydro_forecast_spain/data/processed/google/basins.txt
+train_basin_file: /home/dmercado/Documents/hydro_forecast_spain/data/processed/google/basins.txt
+train_dir: /home/dmercado/Documents/hydro_forecast_spain/data/processed/google/runs/finetuned/train_data
 train_end_date: 30/09/2021
 train_start_date: 01/10/2008
 validate_every: 1
 validate_n_random_basins: 10000
-validation_basin_file: /home/dmercado/Documents/hydro_forecast_catalonia/data/processed/google/basins.txt
+validation_basin_file: /home/dmercado/Documents/hydro_forecast_spain/data/processed/google/basins.txt
 validation_end_date: 30/09/2023
 validation_start_date: 01/10/2021

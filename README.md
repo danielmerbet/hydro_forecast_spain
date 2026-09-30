@@ -25,7 +25,7 @@ model comparison) in full, and the plan for phase 2.
 ## 1. Quick start (reproduce everything)
 
 ```bash
-git clone <this repo> && cd hydro_forecast_catalonia
+git clone <this repo> && cd hydro_forecast_spain
 conda env create -f environment.yml          # ~10 min, CPU-only PyTorch
 conda activate hydrocat
 bash codes/00_setup.sh                       # Google's model at a pinned commit + this package
