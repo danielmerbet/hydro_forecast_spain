@@ -12,17 +12,17 @@
 /* Layout: map (left) + gauge panel (right); stacks on narrow screens. */
 :root {
   --bg: #f5f7f8; --panel: #ffffff; --ink: #13202b; --ink-2: #4d5d69; --rule: #d8e0e5; --water: #e9f1f6;
-  --m-gr4j: #2a78d6; --m-released: #eb6834; --m-finetuned: #1baf7a; --obs: #13202b;
+  --m-gr4j: #2a78d6; --m-released: #8b5fd0; --m-finetuned: #1baf7a; --obs: #13202b;
   --lv0: #7d8f9c; --lv1: #d9a400; --lv2: #e0691f; --lv3: #c0282e;
   --body: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
   --bg: #0f171d; --panel: #16212a; --ink: #e6edf2; --ink-2: #9fb0bd; --rule: #283742; --water: #13202a;
-  --m-gr4j: #3987e5; --m-released: #d95926; --m-finetuned: #199e70; --obs: #e6edf2;
+  --m-gr4j: #3987e5; --m-released: #a07ce0; --m-finetuned: #199e70; --obs: #e6edf2;
   --lv0: #8193a0; --lv1: #e0b020; --lv2: #ec7a33; --lv3: #e0484d; color-scheme: dark; } }
 :root[data-theme="dark"] {
   --bg: #0f171d; --panel: #16212a; --ink: #e6edf2; --ink-2: #9fb0bd; --rule: #283742; --water: #13202a;
-  --m-gr4j: #3987e5; --m-released: #d95926; --m-finetuned: #199e70; --obs: #e6edf2;
+  --m-gr4j: #3987e5; --m-released: #a07ce0; --m-finetuned: #199e70; --obs: #e6edf2;
   --lv0: #8193a0; --lv1: #e0b020; --lv2: #ec7a33; --lv3: #e0484d; color-scheme: dark; }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -107,7 +107,7 @@ const MODEL = {
   gr4j_wn3: ["GR4J · WeatherNext 3", "--m-gr4j", "solid"],
   gr4j_aifs: ["GR4J · AIFS", "--m-gr4j", "dash"],
   gr4j_aifs_ens: ["GR4J · AIFS ensemble", "--m-gr4j", "dot"],
-  google_released: ["Google (released)", "--m-released", "solid"],
+  google_released: ["Google (released)", "--m-released", "dashdot"],
   google_finetuned: ["Google (fine-tuned)", "--m-finetuned", "solid"],
 };
 const SKILL = {gr4j: "GR4J (test, Oct 2023 →)", gr4j_cal: "GR4J (calibration 2008–22)",
@@ -118,6 +118,9 @@ function band(x, lo, hi, color, group) {
   return {x: x.concat([...x].reverse()), y: lo.concat([...hi].reverse()), fill: "toself", fillcolor: color + "33", mode: "lines",
           line: {width: 0}, hoverinfo: "skip", legendgroup: group, showlegend: false, type: "scatter"};
 }
+// Google's released model is for comparison only (it does not set the alert colour): its line is shown,
+// its 5-95 % band is hidden until its own legend entry is clicked, and it never drives the y-axis scale.
+const COMPARE_ONLY = new Set(["google_released"]);
 function drawCatchment(id) {
   if (!CATS || !map) return;
   if (catLayer) map.removeLayer(catLayer);
@@ -138,12 +141,15 @@ function show(id) {
   for (const [k, s] of Object.entries(g.series)) {
     const [base, col, dash] = MODEL[k]; const c = css(col); const x = s.dates || g.fc_dates;
     const label = k.startsWith("google") ? `${base} · ${gf}` : base;
-    if (s.q05) tr.push(band(x, s.q05, s.q95, c, k));
-    tr.push({x, y: s.q50, name: label + (s.q05 ? " (median, 5–95 % band)" : ""), legendgroup: k, mode: "lines",
-             type: "scatter", line: {color: c, width: 2, dash}});
+    const cmp = COMPARE_ONLY.has(k);
+    if (s.q05 && cmp) tr.push({...band(x, s.q05, s.q95, c, k + "_band"), showlegend: true, visible: "legendonly",
+                               name: `${base} 5–95 % band (comparison only)`, compareOnly: true});
+    else if (s.q05) tr.push(band(x, s.q05, s.q95, c, k));
+    tr.push({x, y: s.q50, name: label + (cmp ? " (median, comparison only)" : s.q05 ? " (median, 5–95 % band)" : ""),
+             legendgroup: k, mode: "lines", type: "scatter", line: {color: c, width: 2, dash}, compareOnly: cmp});
   }
-  // y-axis follows the data; a flood-level line is drawn (and labelled) only if it is within reach
-  const vals = tr.flatMap(t => t.y || []).filter(v => v !== null && isFinite(v));
+  // y-axis follows the alert-relevant data; a flood-level line is drawn (and labelled) only if it is within reach
+  const vals = tr.filter(t => !t.compareOnly).flatMap(t => t.y || []).filter(v => v !== null && isFinite(v));
   const ymax = Math.max(0.1, ...vals) * 1.15;
   const lv = Object.entries(g.levels || {}).filter(([k, v]) => v <= ymax * 1.5);
   const lvCol = k => css({T2: "--lv1", T5: "--lv2", T20: "--lv3"}[k]);
@@ -160,6 +166,10 @@ function show(id) {
     xaxis: {gridcolor: css("--rule"), range: [g.fc_dates[0], g.fc_dates[g.fc_dates.length - 1]]},
     legend: {orientation: "h", y: -0.12, yanchor: "top", font: {size: 10.5}}, shapes, annotations,
   }, {displayModeBar: false, responsive: true});
+  // when a hidden comparison band is switched on, let the y-axis grow to show it
+  const el = document.getElementById("chart");
+  el.removeAllListeners?.("plotly_restyle");
+  el.on("plotly_restyle", () => Plotly.relayout(el, {"yaxis.autorange": true}));
   document.getElementById("thresholds").innerHTML = (Object.entries(g.levels || {}).map(([k, v]) =>
     `<span class="chip"><span class="dot l${{T2: 1, T5: 2, T20: 3}[k]}"></span> ${k.replace("T", "")}-year level ${v} m³/s</span>`).join("")
     || `<span class="chip">${NOLV}</span>`)
@@ -182,7 +192,7 @@ fetch("data/latest.json").then(r => r.json()).then(d => {
   DATA = d;
   const noWn3 = Object.entries(d.meta.domains || {}).filter(([k, m]) => !m.weathernext3).map(([k]) => k);
   document.getElementById("issued").textContent = `Forecast issued ${d.meta.issued} (runs ${d.meta.init.slice(0, 8)} 00 UTC)`
-    + (noWn3.length ? ` · WeatherNext 3 not available today${Object.keys(d.meta.domains).length > 1 ? " for " + noWn3.join(", ") : ""}: AIFS only` : "");
+    + (noWn3.length ? ` · WeatherNext 3 not available today${noWn3.length < Object.keys(d.meta.domains).length ? " for " + noWn3.join(", ") : ""}: AIFS only` : "");
   map = L.map("map", {zoomControl: true, preferCanvas: true}).setView([40.3, -3.6], 6);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 13, attribution: "© OpenStreetMap"}).addTo(map);
   fetch("data/gauges.geojson").then(r => r.json()).then(geo => {
