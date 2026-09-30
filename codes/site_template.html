@@ -39,6 +39,7 @@ h2 { font-size: 17px; margin: 0; font-weight: 600; text-wrap: balance; }
 .chip { font: 500 12px/1 var(--mono); border: 1px solid var(--rule); border-radius: 3px; padding: 5px 7px; font-variant-numeric: tabular-nums; }
 .lvl { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
 .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; border: 1.5px solid var(--panel); box-shadow: 0 0 0 1px var(--rule); }
+.nolv { background: transparent; border: 2px solid var(--lv0); box-shadow: none; }
 .l0 { background: var(--lv0); } .l1 { background: var(--lv1); } .l2 { background: var(--lv2); } .l3 { background: var(--lv3); }
 #chart { width: 100%; height: 400px; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -65,7 +66,7 @@ thead th { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing
 <main>
   <div id="map" role="region" aria-label="Map of river gauges"></div>
   <aside>
-    <div id="gauge-head"><h2>Select a gauge on the map</h2><div class="sub">Colours show the highest flood level forecast in the next 7 days.</div></div>
+    <div id="gauge-head"><h2>Select a gauge on the map</h2><div class="sub">Colours show the highest flood level reached by the forecast medians in the next 7 days.</div></div>
     <div id="chart" aria-label="Forecast hydrograph"></div>
     <div id="thresholds" class="chips"></div>
     <div id="skill"></div>
@@ -83,24 +84,26 @@ thead th { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing
       This data is intended for experimental modelling only and is not intended, validated, or approved for real world use.
       ECMWF AIFS open data © ECMWF, CC BY 4.0. Observations: Agència Catalana de l'Aigua.
       Only river discharge derived by hydrological models is published here; no weather-model fields are redistributed.</p>
-    <p class="note">Flood levels are 2-, 5- and 20-year return levels of <b>daily mean</b> discharge (Gumbel fit to observed annual maxima); instantaneous peaks are higher. Models do not know dam operations: forecasts below reservoirs are indicative. GR4J forecasts start from the latest observed discharge. Test-period skill (Oct 2023 onward, ERA5-Land weather) is shown per gauge. Code: numbered scripts in this repository.</p>
+    <p class="note">Flood levels are 2-, 5- and 20-year return levels of <b>daily mean</b> discharge (Gumbel fit to observed annual maxima); instantaneous peaks are higher. Models do not know dam operations: forecasts below reservoirs are indicative. GR4J forecasts start from the latest observed discharge. Test-period skill (Oct 2023 onward, ERA5-Land weather) is shown per gauge. Plots start today; past days are not shown. Code: numbered scripts in this repository.</p>
   </aside>
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.35.3/plotly.min.js"></script>
 <script>
-const LV = ["no flood level", "above 2-year level", "above 5-year level", "above 20-year level"];
+const LV = ["below 2-year level", "above 2-year level", "above 5-year level", "above 20-year level"];
+const NOLV = "no flood levels (short record)";
+const lvText = g => g.has_levels === false ? NOLV : LV[g.level];
+const dotCls = g => g.has_levels === false ? "dot nolv" : `dot l${g.level}`;
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const MODEL = {
   gr4j_wn3: ["GR4J · WeatherNext 3", "--m-gr4j", "solid"],
   gr4j_aifs: ["GR4J · AIFS", "--m-gr4j", "dash"],
   gr4j_aifs_ens: ["GR4J · AIFS ensemble", "--m-gr4j", "dot"],
-  google_released: ["Google (released) · AIFS+WN3", "--m-released", "solid"],
-  google_finetuned: ["Google (fine-tuned) · AIFS+WN3", "--m-finetuned", "solid"],
+  google_released: ["Google (released)", "--m-released", "solid"],
+  google_finetuned: ["Google (fine-tuned)", "--m-finetuned", "solid"],
 };
 const SKILL = {gr4j: "GR4J", google_baseline: "Google (released)", google_finetuned: "Google (fine-tuned)"};
 let DATA, markers = {};
-const addDays = (iso, n) => { const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 
 function band(x, lo, hi, color, group) {
   return {x: x.concat([...x].reverse()), y: lo.concat([...hi].reverse()), fill: "toself", fillcolor: color + "33", mode: "lines",
@@ -112,57 +115,66 @@ function show(id) {
   document.getElementById("gauge-head").innerHTML =
     `<h2>${g.name} <span class="sub">(${g.river})</span></h2>
      <div class="sub">${id} · ${g.area_km2} km² · ${g.regulated ? "regulated (reservoir upstream)" : "near-natural"}</div>
-     <div class="lvl" style="margin-top:6px"><span class="dot l${g.level}"></span>${LV[g.level]} · 7-day peak ${g.peak7 ?? "–"} m³/s</div>`;
+     <div class="lvl" style="margin-top:6px"><span class="${dotCls(g)}"></span>${lvText(g)} · 7-day peak ${g.peak7 ?? "–"} m³/s</div>`;
   const tr = [];
-  tr.push({x: g.obs_dates, y: g.obs, name: "Observed (ACA)", mode: "lines", line: {color: css("--obs"), width: 2}, type: "scatter"});
   for (const [k, s] of Object.entries(g.series)) {
-    const [label, col, dash] = MODEL[k]; const c = css(col); const x = s.dates || g.fc_dates;
+    const [base, col, dash] = MODEL[k]; const c = css(col); const x = s.dates || g.fc_dates;
+    const label = k.startsWith("google") ? `${base} · ${DATA.meta.google_forcing || "AIFS + WN3"}` : base;
     if (s.q05) tr.push(band(x, s.q05, s.q95, c, k));
     tr.push({x, y: s.q50, name: label + (s.q05 ? " (median, 5–95 % band)" : ""), legendgroup: k, mode: "lines",
              type: "scatter", line: {color: c, width: 2, dash}});
   }
-  // y-axis follows the data; a flood-level line is drawn only if it is within reach
-  const x0 = addDays(g.fc_dates[0], -14);
-  const vals = tr.flatMap(t => (t.y || []).filter((v, i) => (t.x[i] || "") >= x0)).filter(v => v !== null && isFinite(v));
+  // y-axis follows the data; a flood-level line is drawn (and labelled) only if it is within reach
+  const vals = tr.flatMap(t => t.y || []).filter(v => v !== null && isFinite(v));
   const ymax = Math.max(1, ...vals) * 1.15;
-  const shapes = Object.entries(g.levels || {}).filter(([k, v]) => v <= ymax * 1.5).map(([k, v]) => ({type: "line", xref: "paper",
-      x0: 0, x1: 1, y0: v, y1: v, line: {color: css({T2: "--lv1", T5: "--lv2", T20: "--lv3"}[k]), width: 1, dash: "dot"}}));
+  const lv = Object.entries(g.levels || {}).filter(([k, v]) => v <= ymax * 1.5);
+  const lvCol = k => css({T2: "--lv1", T5: "--lv2", T20: "--lv3"}[k]);
+  const shapes = lv.map(([k, v]) => ({type: "line", xref: "paper",
+      x0: 0, x1: 1, y0: v, y1: v, line: {color: lvCol(k), width: 1.5, dash: "dot"}}));
+  const annotations = lv.map(([k, v]) => ({xref: "paper", x: 1, xanchor: "right", y: v, yanchor: "bottom",
+      text: `${k.slice(1)}-year level`, showarrow: false, font: {size: 10, color: lvCol(k)}}));
   const top = Math.max(ymax, ...shapes.map(sh => sh.y0 * 1.08));
   Plotly.react("chart", tr, {
     margin: {l: 48, r: 8, t: 8, b: 8}, paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
     font: {family: css("--body"), color: css("--ink-2"), size: 11}, hovermode: "x unified",
     yaxis: {title: "m³/s", gridcolor: css("--rule"), range: [0, top]},
-    // open on the last 14 observed days + the forecast; zoom out for the full 60 days
-    xaxis: {gridcolor: css("--rule"), range: [addDays(g.fc_dates[0], -14), g.fc_dates[g.fc_dates.length - 1]]},
-    legend: {orientation: "h", y: -0.12, yanchor: "top", font: {size: 10.5}}, shapes,
+    // forecast days only: today (day 1) to day 15
+    xaxis: {gridcolor: css("--rule"), range: [g.fc_dates[0], g.fc_dates[g.fc_dates.length - 1]]},
+    legend: {orientation: "h", y: -0.12, yanchor: "top", font: {size: 10.5}}, shapes, annotations,
   }, {displayModeBar: false, responsive: true});
-  document.getElementById("thresholds").innerHTML = Object.entries(g.levels || {}).map(([k, v]) =>
-    `<span class="chip">${k.replace("T", "")}-year level ${v} m³/s</span>`).join("") || `<span class="chip">no flood levels (short record)</span>`;
+  document.getElementById("thresholds").innerHTML = (Object.entries(g.levels || {}).map(([k, v]) =>
+    `<span class="chip"><span class="dot l${{T2: 1, T5: 2, T20: 3}[k]}"></span> ${k.replace("T", "")}-year level ${v} m³/s</span>`).join("")
+    || `<span class="chip">${NOLV}</span>`)
+    + `<div class="note" style="flex-basis:100%">Dotted lines: flood levels of daily mean flow. Lines: forecast medians; shaded: 5–95 % range. The map colour uses the medians over days 1–7.</div>`;
   const rows = Object.entries(g.skill || {}).filter(([k]) => SKILL[k]).map(([k, v]) =>
     `<tr><td>${SKILL[k]}</td><td>${v.KGE ?? "–"}</td><td>${v.NSE ?? "–"}</td></tr>`).join("");
   document.getElementById("skill").innerHTML = rows ? `<table><thead><tr><th>Test-period skill</th><th>KGE</th><th>NSE</th></tr></thead><tbody>${rows}</tbody></table>` : "";
 }
 fetch("data/latest.json").then(r => r.json()).then(d => {
   DATA = d;
-  document.getElementById("issued").textContent = `Forecast issued ${d.meta.issued} (runs ${d.meta.init.slice(0, 8)} 00 UTC)`;
+  document.getElementById("issued").textContent = `Forecast issued ${d.meta.issued} (runs ${d.meta.init.slice(0, 8)} 00 UTC)`
+    + (d.meta.weathernext3 === false ? " · WeatherNext 3 not available today: AIFS only" : "");
   const map = L.map("map", {zoomControl: true}).setView([41.85, 2.1], 8);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 13, attribution: "© OpenStreetMap"}).addTo(map);
   fetch("data/gauges.geojson").then(r => r.json()).then(geo => {
     L.geoJSON(geo.catchments, {style: {color: css("--m-gr4j"), weight: 0.6, fillOpacity: 0.04}}).addTo(map);
     for (const f of geo.features) {
       const id = f.properties.id, g = d.gauges[id], [lon, lat] = f.geometry.coordinates;
-      const m = L.circleMarker([lat, lon], {radius: 6 + 2 * g.level, color: css("--panel"), weight: 1.5,
-        fillColor: css(`--lv${g.level}`), fillOpacity: 1}).addTo(map);
-      m.bindTooltip(`${g.name} (${g.river}) — ${LV[g.level]}`); m.on("click", () => show(id)); markers[id] = m;
+      const nolv = g.has_levels === false;
+      const m = L.circleMarker([lat, lon], nolv
+        ? {radius: 5, color: css("--lv0"), weight: 2, fillColor: css("--panel"), fillOpacity: 1}
+        : {radius: 6 + 2 * g.level, color: css("--panel"), weight: 1.5, fillColor: css(`--lv${g.level}`), fillOpacity: 1}).addTo(map);
+      m.bindTooltip(`${g.name} (${g.river}) — ${lvText(g)}`); m.on("click", () => show(id)); markers[id] = m;
     }
     const lg = L.control({position: "bottomleft"});
     lg.onAdd = () => { const el = L.DomUtil.create("div", "legend");
-      el.innerHTML = LV.map((t, i) => `<span class="dot l${i}"></span> ${t}`).join("<br>"); return el; };
+      el.innerHTML = LV.map((t, i) => `<span class="dot l${i}"></span> ${t}`).join("<br>")
+        + `<br><span class="dot nolv"></span> ${NOLV}`; return el; };
     lg.addTo(map);
   });
   const ids = Object.keys(d.gauges).sort((a, b) => d.gauges[b].level - d.gauges[a].level || (d.gauges[b].peak7 ?? 0) - (d.gauges[a].peak7 ?? 0));
   document.getElementById("list").innerHTML = ids.map(id => { const g = d.gauges[id];
-    return `<button data-id="${id}"><span><span class="dot l${g.level}"></span> ${g.name} <span class="sub">(${g.river})</span></span><span class="sub">${g.peak7 ?? "–"} m³/s</span></button>`; }).join("");
+    return `<button data-id="${id}"><span><span class="${dotCls(g)}"></span> ${g.name} <span class="sub">(${g.river})</span></span><span class="sub">${g.peak7 ?? "–"} m³/s</span></button>`; }).join("");
   document.querySelectorAll(".list button").forEach(b => b.addEventListener("click", () => show(b.dataset.id)));
   let start = "EA020"; try { start = localStorage.getItem("gauge") || start; } catch (e) {}
   show(d.gauges[start] ? start : ids[0]);

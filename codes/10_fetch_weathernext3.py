@@ -31,6 +31,11 @@ WHAT IS COMPUTED
   Units and names match the ERA5-Land forcing of script 03, so the models can
   switch from reanalysis to forecast without conversion.
 
+OPTIONAL PRODUCT: if the Earth Engine account cannot read the asset (e.g. the
+  service account used by GitHub Actions is not yet allowlisted) or no complete
+  run exists, the script exits with code 3 and a clear message; run_daily.sh
+  then continues with AIFS only, and scripts 12-14 publish the AIFS products.
+
 Writes  data/forecasts/<domain>/weathernext3/<init YYYYMMDDHH>/forcing.parquet (+ meta.json)
 """
 from __future__ import annotations
@@ -38,6 +43,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
+import sys
 
 import ee
 import geopandas as gpd
@@ -95,15 +102,34 @@ def daily_stack(col, init: dt.datetime) -> ee.Image:
     return ee.Image.cat(imgs).toFloat()
 
 
+def available() -> bool:
+    """True if this Earth Engine account can read the WeatherNext 3 asset (HYDROCAT_SKIP_WN3=1 forces False)."""
+    if os.environ.get("HYDROCAT_SKIP_WN3") == "1":
+        log("WeatherNext 3 switched off (HYDROCAT_SKIP_WN3=1)")
+        return False
+    try:
+        init_ee()
+        return retry(ee.ImageCollection(ASSET).limit(1).size().getInfo) > 0
+    except Exception as e:  # noqa: BLE001 — any failure means "not usable today"
+        log(f"WeatherNext 3 not readable: {str(e)[:200]}")
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--domain", default="catalonia", choices=list(S["domains"]))
     ap.add_argument("--init", default=None, help="YYYY-MM-DD (00 UTC run); default: latest complete")
     args = ap.parse_args()
     D = S["domains"][args.domain]
-    init_ee()
+    if not available():
+        log("WeatherNext 3 skipped: no read access for this account (request allowlisting); AIFS only")
+        sys.exit(3)
     col = ee.ImageCollection(ASSET)
-    init = dt.datetime.fromisoformat(args.init) if args.init else latest_init(col)
+    try:
+        init = dt.datetime.fromisoformat(args.init) if args.init else latest_init(col)
+    except RuntimeError as e:
+        log(f"WeatherNext 3 skipped: {e}")
+        sys.exit(3)
     out = DATA / "forecasts" / args.domain / "weathernext3" / init.strftime("%Y%m%d%H")
     out.mkdir(parents=True, exist_ok=True)
     log(f"WeatherNext 3 run {init:%Y-%m-%d %H} UTC, {DAYS} days, domain {args.domain}")

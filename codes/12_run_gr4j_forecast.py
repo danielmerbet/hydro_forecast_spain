@@ -4,12 +4,15 @@
 
 1. STATES. GR4J is run from the start of the warm-up with ERA5-Land. ERA5-Land
    ends ~7 days before today, so the gap up to the forecast start is BRIDGED
-   with WeatherNext 3's first forecast day of each daily 00 UTC run ("short
-   forecast as analysis"), cached per date in data/forecasts/<domain>/bridge/.
-   The same bridge is used for every forecast product, so all start from the
-   same model states.
+   with the first forecast day of each daily 00 UTC run ("short forecast as
+   analysis"): WeatherNext 3 when this account can read it, otherwise AIFS
+   (past runs from ECMWF's AWS mirror, script 11 --date --days 1). Cached per
+   date in data/forecasts/<domain>/bridge/ (column bridge_source). The same
+   bridge is used for every forecast product, so all start from the same
+   model states.
 2. FORECASTS, 15 days, per gauge:
-     wn3        WeatherNext 3 ensemble-mean forcing
+     wn3        WeatherNext 3 ensemble-mean forcing (optional: skipped when the
+                WeatherNext 3 run of the same init is not available)
      aifs       AIFS deterministic
      aifs_mNN   50 AIFS-ENS members: member rain, other variables from AIFS
                 deterministic (only rain is published for the members here)
@@ -33,14 +36,14 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import importlib.util
+import subprocess
+import sys
 
-import ee
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 
 from hydrocat.config import DATA, PROCESSED, ROOT, load_settings
-from hydrocat.eeutils import init_ee
 from hydrocat.forcing import load_forcing
 from hydrocat.gr4j import CatchmentModel
 
@@ -61,23 +64,39 @@ def _load(name):
 
 
 def bridge(domain, first: dt.date, last: dt.date) -> pd.DataFrame:
-    """Daily forcing for first..last from WeatherNext 3 day 0 of each date's 00 UTC run."""
-    s10 = _load("10_fetch_weathernext3")
-    cache = DATA / "forecasts" / domain / "bridge"
+    """Daily forcing for first..last from day 0 of each date's 00 UTC run (WeatherNext 3, else AIFS)."""
+    fdir = DATA / "forecasts" / domain
+    cache = fdir / "bridge"
     cache.mkdir(parents=True, exist_ok=True)
+    wn3_ok = None
     out = []
     for d in pd.date_range(first, last, freq="D").date:
         f = cache / f"{d:%Y%m%d}.parquet"
         if not f.exists():
-            run = DATA / "forecasts" / domain / "weathernext3" / f"{d:%Y%m%d}00" / "forcing.parquet"
+            run = fdir / "weathernext3" / f"{d:%Y%m%d}00" / "forcing.parquet"
             if not run.exists():
-                import subprocess
-                subprocess.run(["python", str(ROOT / "codes" / "10_fetch_weathernext3.py"),
-                                "--domain", domain, "--init", d.isoformat()], check=True)
+                if wn3_ok is None:
+                    wn3_ok = _load("10_fetch_weathernext3").available()
+                if wn3_ok:
+                    subprocess.run([sys.executable, str(ROOT / "codes" / "10_fetch_weathernext3.py"),
+                                    "--domain", domain, "--init", d.isoformat()], check=False)
+            src = "weathernext3"
+            if not run.exists():
+                src = "aifs"
+                run = fdir / "aifs" / f"{d:%Y%m%d}00" / "forcing.parquet"
+                if not run.exists():
+                    run = fdir / "bridge_aifs" / f"{d:%Y%m%d}00" / "forcing.parquet"
+                    if not run.exists():
+                        subprocess.run([sys.executable, str(ROOT / "codes" / "11_fetch_aifs.py"), "--domain", domain,
+                                        "--date", d.isoformat(), "--days", "1", "--no-ens",
+                                        "--out", str(fdir / "bridge_aifs")], check=True)
             x = pd.read_parquet(run)
-            x[x.date == pd.Timestamp(d)].to_parquet(f, index=False)
+            x[x.date == pd.Timestamp(d)].assign(bridge_source=src).to_parquet(f, index=False)
         out.append(pd.read_parquet(f))
-    return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+    b = pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+    if len(b):
+        b["bridge_source"] = b.get("bridge_source", pd.Series(index=b.index, dtype=object)).fillna("weathernext3")
+    return b
 
 
 def main():
@@ -88,8 +107,7 @@ def main():
     D = S["domains"][args.domain]
     base = PROCESSED if args.domain == "catalonia" else PROCESSED / args.domain
     fdir = DATA / "forecasts" / args.domain
-    inits = sorted(set(p.name for p in (fdir / "weathernext3").iterdir()) & set(p.name for p in (fdir / "aifs").iterdir()))
-    init = args.init or inits[-1]
+    init = args.init or sorted(p.name for p in (fdir / "aifs").iterdir())[-1]        # AIFS is required
     d0 = pd.Timestamp(dt.datetime.strptime(init, "%Y%m%d%H").date())
     log(f"GR4J forecast, runs of {init}, domain {args.domain}")
 
@@ -97,10 +115,14 @@ def main():
     era = era[era.date >= S["periods"]["warmup_start"]]
     last_era = era.date.max()
     br = bridge(args.domain, (last_era + pd.Timedelta(days=1)).date(), (d0 - pd.Timedelta(days=1)).date())
-    log(f"   ERA5-Land to {last_era.date()}, bridge {len(br.date.unique()) if len(br) else 0} days")
+    log(f"   ERA5-Land to {last_era.date()}, bridge {len(br.date.unique()) if len(br) else 0} days"
+        + (f" ({br.drop_duplicates('date').bridge_source.value_counts().to_dict()})" if len(br) else ""))
     past = pd.concat([era[["date", "gauge_id", *VARS]], br[["date", "gauge_id", *VARS]]], ignore_index=True)
 
-    wn3 = pd.read_parquet(fdir / "weathernext3" / init / "forcing.parquet")
+    wf = fdir / "weathernext3" / init / "forcing.parquet"
+    wn3 = pd.read_parquet(wf) if wf.exists() else None
+    if wn3 is None:
+        log(f"   no WeatherNext 3 run for {init}: AIFS products only")
     aifs = pd.read_parquet(fdir / "aifs" / init / "forcing.parquet")
     ens_f = fdir / "aifs" / init / "precip_members.parquet"
     ens = pd.read_parquet(ens_f) if ens_f.exists() else None
@@ -115,7 +137,7 @@ def main():
     for gid, p in par.iterrows():
         k = cat.area_km2[gid] / 86.4
         hist = past[past.gauge_id == gid].sort_values("date")
-        scen = {"wn3": wn3, "aifs": aifs}
+        scen = {"aifs": aifs} if wn3 is None else {"wn3": wn3, "aifs": aifs}
         if ens is not None:
             for mnum, e in ens[ens.gauge_id == gid].groupby("member"):
                 a = aifs[aifs.gauge_id == gid].drop(columns="total_precipitation").merge(
@@ -133,7 +155,7 @@ def main():
             ui = int(np.searchsorted(s.date.values, np.datetime64(upd_date))) if upd_date is not None else -1
             q = m.run(params, ui, upd_mm) * k
             q = np.where(q < p.q0_m3s, 0.0, q)
-            sel = s.date.values >= (d0 - pd.Timedelta(days=60)).to_datetime64()       # keep 60 past days for context
+            sel = (s.date >= d0 - pd.Timedelta(days=60)).values                        # keep 60 past days for context
             rows.append(pd.DataFrame({"date": s.date.values[sel], "gauge_id": gid, "product": name, "q": q[sel]}))
     q = pd.concat(rows, ignore_index=True)
     mem = q[q["product"].str.startswith("aifs_m")]

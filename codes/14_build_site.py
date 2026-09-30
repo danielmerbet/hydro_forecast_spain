@@ -2,8 +2,11 @@
 """
 14 — Build the public forecast website (GitHub Pages, folder docs/).
 
-Reads today's forecasts (scripts 12, 13), recent observations and the
-test-period skill of each model (script 08), and writes a static site:
+Reads today's forecasts (scripts 12, 13), the observed record (for the flood
+levels) and the test-period skill of each model (script 08), and writes a
+static site. Plots start on the forecast day (today): past days are not shown.
+Products are published only if they exist for the run (WeatherNext 3 is
+optional; the Google model's forcing is recorded as AIFS or AIFS + WN3).
 
   docs/index.html            map + hydrograph panel (Leaflet + Plotly from CDNs)
   docs/data/latest.json      everything the page shows for the latest run
@@ -16,7 +19,8 @@ ALERT LEVELS (per gauge, like Flood Hub's return-period warnings)
   2-, 5- and 20-year return levels are the thresholds. A gauge's level is the
   highest threshold exceeded by the median of any forecast product in the next
   7 days. Daily means are lower than instantaneous peaks, so these are levels
-  of daily flow, stated as such on the page.
+  of daily flow, stated as such on the page. Gauges without enough record have
+  no levels (has_levels = false) and are drawn differently, never as "safe".
 """
 from __future__ import annotations
 
@@ -67,12 +71,15 @@ def main():
     gauges = sorted(set(gr.gauge_id))
 
     out, feats = {}, []
+    products = set(gr["product"])
+    gforcing = sorted(set(go["forcing"])) if "forcing" in go else []
     for gid in gauges:
-        o = obs[gid][d0 - pd.Timedelta(days=60): d0].dropna() if gid in obs else pd.Series(dtype=float)
         lv = gumbel_levels(obs[gid].dropna()) if gid in obs else None
         g = gr[gr.gauge_id == gid]
         series = {}
         for prod in ["wn3", "aifs"]:
+            if prod not in products:
+                continue
             x = g[(g["product"] == prod) & (g.date >= d0)].set_index("date").q
             series[f"gr4j_{prod}"] = {"q50": [r(v) for v in x.values]}
         e = g[(g["product"] == "aifs_ens") & (g.date >= d0)].set_index("date")
@@ -84,7 +91,7 @@ def main():
             if len(x):
                 series[prod] = {k: [r(v) for v in x[k].values] for k in ["q05", "q25", "q50", "q75", "q95"]}
                 series[prod]["dates"] = [d.strftime("%Y-%m-%d") for d in x.index]
-        fc_dates = [d.strftime("%Y-%m-%d") for d in g[(g["product"] == "wn3") & (g.date >= d0)].date]
+        fc_dates = [d.strftime("%Y-%m-%d") for d in g[(g["product"] == "aifs") & (g.date >= d0)].date]
         peak7 = max([max([v for v in s["q50"][:7] if v is not None] or [0]) for s in series.values()] or [0])
         level = 0
         if lv:
@@ -95,18 +102,21 @@ def main():
             skill = {k: {"KGE": r(mm.KGE.get(k), 2), "NSE": r(mm.NSE.get(k), 2)} for k in mm.index}
         out[gid] = dict(name=str(st.loc[gid, "name"]), river=str(st.loc[gid, "river"]),
                         area_km2=r(cat.area_km2.get(gid), 0), regulated=bool(att.regulated.get(gid, False)),
-                        obs_dates=[d.strftime("%Y-%m-%d") for d in o.index], obs=[r(v) for v in o.values],
                         fc_dates=fc_dates, series=series, levels={k: r(v, 2) for k, v in (lv or {}).items()},
-                        level=int(level), peak7=r(peak7, 2), skill=skill)
+                        has_levels=lv is not None, level=int(level), peak7=r(peak7, 2), skill=skill)
         c = cat.loc[gid]
-        feats.append({"type": "Feature", "properties": {"id": gid, "level": int(level)},
+        feats.append({"type": "Feature", "properties": {"id": gid, "level": int(level), "has_levels": lv is not None},
                       "geometry": {"type": "Point", "coordinates": [c.gauge_lon, c.gauge_lat]}})
 
+    wn3_used = "wn3" in products or "aifs+wn3" in gforcing
+    sources = {"aifs": "ECMWF AIFS open data (CC BY 4.0), deterministic + 50-member ensemble rain",
+               "observations": "Agència Catalana de l'Aigua (open data)"}
+    if wn3_used:
+        sources["weathernext3"] = "Google DeepMind WeatherNext 3 (Earth Engine), ensemble mean"
     meta = {"init": init, "issued": d0.strftime("%Y-%m-%d"),
             "built_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="minutes"),
-            "sources": {"weathernext3": "Google DeepMind WeatherNext 3 (Earth Engine), ensemble mean",
-                        "aifs": "ECMWF AIFS open data (CC BY 4.0), deterministic + 50-member ensemble rain",
-                        "observations": "Agència Catalana de l'Aigua (open data)"}}
+            "weathernext3": wn3_used, "google_forcing": "AIFS + WN3" if "aifs+wn3" in gforcing else "AIFS",
+            "sources": sources}
     (SITE / "data" / "archive").mkdir(parents=True, exist_ok=True)
     payload = {"meta": meta, "gauges": out}
     (SITE / "data" / "latest.json").write_text(json.dumps(payload, separators=(",", ":")))
@@ -119,7 +129,7 @@ def main():
     (SITE / "index.html").write_text((ROOT / "codes" / "site_template.html").read_text())
     (SITE / ".nojekyll").write_text("")
     n = pd.Series([g["level"] for g in out.values()]).value_counts().sort_index().to_dict()
-    log(f"-> docs/ built for run {init}: {len(out)} gauges, alert levels {n}")
+    log(f"-> docs/ built for run {init}: {len(out)} gauges, alert levels {n}, WeatherNext 3 {'yes' if wn3_used else 'no'}")
 
 
 if __name__ == "__main__":

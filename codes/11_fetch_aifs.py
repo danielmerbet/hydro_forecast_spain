@@ -22,14 +22,25 @@ DAILY AGGREGATION (UTC days k = 0..14 after the 00 UTC init)
   Net radiation, pressure and PET: FAO-56, exactly as for WeatherNext 3
   (script 10), so the two forecast products are processed identically.
 
+MIRRORS: ECMWF's own server keeps only the last ~4 days; the same files are
+  replicated on Google Cloud (storage.googleapis.com/ecmwf-open-data) and AWS
+  with a long archive. Sources are tried in order (ecmwf -> google -> aws;
+  past runs skip ecmwf) with few retries, so a throttled mirror (e.g. S3
+  "SlowDown") fails fast instead of hanging.
+PAST RUNS (--date): Script 12
+  uses this with --days 1 --no-ens to bridge the days between the end of
+  ERA5-Land and today when WeatherNext 3 is not available.
+
 Writes  data/forecasts/<domain>/aifs/<init YYYYMMDDHH>/forcing.parquet          deterministic
         data/forecasts/<domain>/aifs/<init>/precip_members.parquet              date, gauge_id, member, tp
+        (--out DIR writes to DIR/<init>/ instead)
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
 import json
+from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
@@ -42,7 +53,6 @@ from hydrocat.gridweights import catchment_means, catchment_weights
 from hydrocat.pet import fao56_net_radiation, fao56_penman_monteith
 
 S = load_settings()
-DAYS = 15
 RES = 0.25
 PARAMS = ["tp", "2t", "2d", "10u", "10v", "sp", "ssrd"]
 
@@ -74,6 +84,27 @@ def grid_of(da):
     return Affine(RES, 0, float(lon[0]) - RES / 2, 0, -RES, float(lat[0]) + RES / 2), (len(lat), len(lon))
 
 
+def client(source, model):
+    from ecmwf.opendata import Client
+    return Client(source=source, model=model, maximum_retries=3, retry_after=20)
+
+
+def fetch(sources, model, target, **req) -> str:
+    """Download one request from the first mirror that serves it; returns the mirror name."""
+    err = None
+    for src in sources:
+        tmp = target.with_suffix(".part")
+        try:
+            client(src, model).retrieve(target=str(tmp), **req)
+            tmp.rename(target)
+            return src
+        except Exception as e:  # noqa: BLE001 — try the next mirror
+            err = e
+            tmp.unlink(missing_ok=True)
+            log(f"   {model} from {src} failed ({str(e)[:120]}), next mirror")
+    raise RuntimeError(f"AIFS {model} {req.get('date')} not available from {sources}") from err
+
+
 def open_param(path, name):
     ds = xr.open_dataset(path, engine="cfgrib", backend_kwargs={"indexpath": ""})
     var = list(ds.data_vars)[0]
@@ -84,24 +115,34 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--domain", default="catalonia", choices=list(S["domains"]))
     ap.add_argument("--no-ens", action="store_true", help="skip the AIFS ensemble precipitation")
+    ap.add_argument("--date", default=None, help="YYYY-MM-DD: the 00 UTC run of that day (default: latest)")
+    ap.add_argument("--days", type=int, default=15, help="forecast days to process (1 = day 0 only)")
+    ap.add_argument("--out", default=None, help="output root (default data/forecasts/<domain>/aifs)")
     args = ap.parse_args()
-    from ecmwf.opendata import Client
     D = S["domains"][args.domain]
-    cli = Client(source="ecmwf", model="aifs-single")
-    init = cli.latest(param="tp", step=360)
-    init = init.replace(hour=0) if init.hour else init                      # the day's 00 UTC run
+    DAYS = args.days
+    if args.date:
+        init = dt.datetime.fromisoformat(args.date)
+        recent = (dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) - init).days <= 3
+        sources = ["ecmwf", "google", "aws"] if recent else ["google", "aws"]   # ECMWF keeps ~4 days
+    else:
+        sources = ["ecmwf", "google", "aws"]
+        init = client("ecmwf", "aifs-single").latest(param="tp", step=360)
+        init = init.replace(hour=0) if init.hour else init                  # the day's 00 UTC run
     cache = RAW / "aifs" / init.strftime("%Y%m%d%H")
     cache.mkdir(parents=True, exist_ok=True)
-    out = DATA / "forecasts" / args.domain / "aifs" / init.strftime("%Y%m%d%H")
+    root = Path(args.out) if args.out else DATA / "forecasts" / args.domain / "aifs"
+    out = root / init.strftime("%Y%m%d%H")
     out.mkdir(parents=True, exist_ok=True)
-    log(f"AIFS run {init:%Y-%m-%d %H} UTC, domain {args.domain}")
+    log(f"AIFS run {init:%Y-%m-%d %H} UTC, {DAYS} days, domain {args.domain}")
+    used = set()
 
     steps = list(range(0, 24 * DAYS + 1, 6))
     fields = {}
     for p in PARAMS:
-        f = cache / f"single_{p}.grib2"
+        f = cache / f"single_{p}_{DAYS}d.grib2"
         if not f.exists():
-            cli.retrieve(date=init.date(), time=0, step=steps, param=p, target=str(f))
+            used.add(fetch(sources, "aifs-single", f, date=init.date(), time=0, step=steps, param=p))
         fields[p] = crop(open_param(f, p), D["bbox"])
     tr, shape = grid_of(fields["tp"])
     gdf = gpd.read_file(ROOT / D["catchments"])
@@ -152,11 +193,10 @@ def main():
     log(f"-> {out.relative_to(ROOT)}/forcing.parquet")
 
     if not args.no_ens:
-        ens = Client(source="ecmwf", model="aifs-ens")
-        fe = cache / "ens_tp.grib2"
+        fe = cache / f"ens_tp_{DAYS}d.grib2"
         if not fe.exists():
-            ens.retrieve(date=init.date(), time=0, type="pf", step=list(range(0, 24 * DAYS + 1, 24)),
-                         number=list(range(1, 51)), param="tp", target=str(fe))
+            used.add(fetch(sources, "aifs-ens", fe, date=init.date(), time=0, type="pf",
+                           step=list(range(0, 24 * DAYS + 1, 24)), number=list(range(1, 51)), param="tp"))
         da = crop(to_mm(open_param(fe, "tp")), D["bbox"])
         tr_e, shape_e = grid_of(da)
         We = W if shape_e == shape else catchment_weights(gdf, tr_e, shape_e)
@@ -172,7 +212,7 @@ def main():
         log(f"-> {out.relative_to(ROOT)}/precip_members.parquet ({da.number.size} members)")
 
     (out / "meta.json").write_text(json.dumps({
-        "source": "ECMWF open data aifs-single (+ aifs-ens tp)", "licence": "CC BY 4.0, (c) ECMWF",
+        "source": f"ECMWF open data aifs-single (+ aifs-ens tp), via {sorted(used - {None}) or 'cache'}", "licence": "CC BY 4.0, (c) ECMWF",
         "init_utc": init.isoformat(), "days": DAYS,
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}, indent=1))
     s = f.groupby("date")[["total_precipitation", "temperature_2m", "pet_fao56"]].median()

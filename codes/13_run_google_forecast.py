@@ -13,7 +13,12 @@ INPUTS (Caravan-MultiMet format, as in script 06, but for one issue date)
                                lead present over the hindcast year).
   HRES slots,      leads 1..10: ECMWF AIFS deterministic (script 11)
   GRAPHCAST slots, leads 1..10: WeatherNext 3 ensemble mean (script 10) —
-                               GraphCast's successor at Google DeepMind
+                               GraphCast's successor at Google DeepMind. Optional:
+                               without a WeatherNext 3 run for the same init these
+                               slots also get AIFS. They cannot stay missing: the
+                               model only accepts a missing product where ERA5-Land
+                               can substitute it (union_mapping), i.e. not in the
+                               future. Product label then records forcing = aifs.
   IMERG, CPC: missing (the model is built to average over available products).
 MODELS
   released   the pretrained weights as published (script 07)
@@ -75,8 +80,7 @@ def main():
     ap.add_argument("--gpu", type=int, default=-1)
     args = ap.parse_args()
     fdir = DATA / "forecasts" / args.domain
-    inits = sorted(set(p.name for p in (fdir / "weathernext3").iterdir()) & set(p.name for p in (fdir / "aifs").iterdir()))
-    init = args.init or inits[-1]
+    init = args.init or sorted(p.name for p in (fdir / "aifs").iterdir())[-1]        # AIFS is required
     D0 = pd.Timestamp(dt.datetime.strptime(init, "%Y%m%d%H").date())
     I = D0 - pd.Timedelta(days=1)                                              # issue date
     work = fdir / "google" / init
@@ -124,11 +128,16 @@ def main():
         return xr.Dataset(out, coords={"basin": basins, "date": dates, "lead_time": LEADS})
 
     aifs = pd.read_parquet(fdir / "aifs" / init / "forcing.parquet")
-    wn3 = pd.read_parquet(fdir / "weathernext3" / init / "forcing.parquet")
+    wf = fdir / "weathernext3" / init / "forcing.parquet"
     hres = fc_product(aifs, {f"hres_{v}": v for v in V})
     write(hres[cfg0["forecast_inputs"]["hres"]], inp / "dynamics" / "HRES" / "timeseries.zarr")
-    gc = fc_product(wn3, {"graphcast_temperature_2m": "temperature_2m",
-                          "graphcast_total_precipitation": "total_precipitation"})
+    if wf.exists():
+        gc = fc_product(pd.read_parquet(wf), {"graphcast_temperature_2m": "temperature_2m",
+                                              "graphcast_total_precipitation": "total_precipitation"})
+    else:
+        log("   no WeatherNext 3 run for this init: AIFS also in the GRAPHCAST slots")
+        gc = fc_product(aifs, {"graphcast_temperature_2m": "temperature_2m",
+                               "graphcast_total_precipitation": "total_precipitation"})
     write(gc, inp / "dynamics" / "GRAPHCAST" / "timeseries.zarr")
     nan2 = lambda n: xr.Dataset({n: (("basin", "date"), np.full((len(basins), len(dates)), np.nan, "float32"))},  # noqa: E731
                                 coords={"basin": basins, "date": dates})
@@ -182,10 +191,10 @@ def main():
         qs = qs * k
         for b, g in enumerate(gids):
             for L in range(qs.shape[1]):
-                frames.append(dict(date=I + pd.Timedelta(days=L), gauge_id=g, product=name,
+                frames.append(dict(date=I + pd.Timedelta(days=int(L)), gauge_id=g, product=name,
                                    **{f"q{int(q * 100):02d}": float(qs[b, L, j]) for j, q in enumerate(QU)}))
         log(f"   {name}: done")
-    out = pd.DataFrame(frames)
+    out = pd.DataFrame(frames).assign(forcing="aifs+wn3" if wf.exists() else "aifs")
     out.to_parquet(work / "q_forecast.parquet", index=False)
     log(f"-> {(work / 'q_forecast.parquet').relative_to(ROOT)}")
 
