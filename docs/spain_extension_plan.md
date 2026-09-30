@@ -22,7 +22,7 @@ ACA export + open data, with an overlap check where they meet.
 | Júcar | 60 (45) | SAIH Júcar, gauge list embedded in the map page + 5-min values endpoint used by its public charts | **done** — 34 gauges, 2024-07-26 → today (the system keeps ~2 years) |
 | Guadalquivir | 104 (42) | SAIH Guadalquivir, public ASP.NET "Datos Históricos" form (daily mean) | **done** — 34 gauges, 2021-10 → today; overlap median r = 0.988, 12 flagged (regulated) |
 | Miño-Sil | 66 (56) | saih.chminosil.es, 15-min tables per week (session cookie; FNMT intermediate certificate) | **live only** — public history is ~3 weeks, so no backfill; to be archived daily by the operational run |
-| Segura | 55 (47) | saihweb.chsegura.es iVisor | **waiting** — a terms-of-use form must be accepted (free use, cite CHS, provisional data): user's decision |
+| Segura | 55 (47) | SAIH Segura iVisor, daily means from Oct 1996 (graficaVar.php), reliable values only | **done** — terms of use accepted 2026-09-30 (cite CHS; provisional data); 42 gauges, 2021-10 → today; overlap median r = 0.972, 5 flagged |
 | Cantábrico | 73 (68) | visor.saichcantabrico.es (WordPress) | **not automated** — the download script is deliberately obfuscated; request the data formally from CHC |
 | Tajo | 182 (7) | saihtajo.chtajo.es (single-page app) | **pending** — data URLs are per-session encrypted tokens; fragile, low priority |
 | Duero | 205 (0) | saihduero.es | **pending** — CEDEX has no SAIH codes: stations must be matched by name/location |

@@ -29,7 +29,9 @@ ADAPTERS (status)
          page uses; daily means on local days (>= 75 % coverage).
   guadalquivir  SAIH Guadalquivir (CHG): the public ASP.NET "Datos Históricos"
          form (daily mean of the river-discharge signal of each unit).
-  others: see docs/spain_extension_plan.md (Segura needs terms-of-use acceptance,
+  segura SAIH Segura (CHS) iVisor — terms of use accepted 2026-09-30 (cite CHS;
+         provisional data); daily means from October 1996, reliable values only.
+  others: see docs/spain_extension_plan.md (
          Cantábrico's download page is obfuscated -> formal data request,
          Tajo uses per-session encrypted URLs).
 
@@ -264,6 +266,61 @@ class SaihGuadalquivir:
         return pd.DataFrame(out).sort_index()
 
 
+class SaihSegura:
+    """SAIH Segura (CHS), iVisor https://saihweb.chsegura.es/apps/iVisor.
+    TERMS OF USE accepted on 2026-09-30 at the user's request: free use, cite
+    the CONFEDERACIÓN HIDROGRÁFICA DEL SEGURA as source, data are provisional
+    (https://www.chsegura.es/es/cuenca/redes-de-control/saih/ivisor/).
+    Daily means (source=D) of a discharge variable (<point>Q01 / <point>Q02)
+    are read from the page the viewer embeds (graficas/graficaVar.php), which
+    serves data from October 1996; only values flagged reliable (fb='1') are
+    kept. Point -> variable from the viewer's river topology list, otherwise
+    <point>Q01, then <point>Q02."""
+    name = "segura"
+    base = "https://saihweb.chsegura.es/apps/iVisor"
+
+    def signals(self, stations):
+        raw = subprocess.run(["curl", "-sS", "--fail", "-A", "Mozilla/5.0 (hydro-forecast)", "-e", self.base + "/index.php",
+                              "-d", "action=consultar_cauces_topo", self.base + "/obtener_datos.php"],
+                             capture_output=True, check=True).stdout
+        topo = {d["CodPuntoMedicion"][:5]: d["CodVariableHidrologicaCaudal"] for d in json.loads(raw)
+                if d.get("CodVariableHidrologicaCaudal")}
+        out = {}
+        for c in stations:
+            k = str(c).strip()[:5]
+            out[c] = [topo[k]] if k in topo else [k + "Q01", k + "Q02"]
+        return out
+
+    def _series(self, var, start, end):
+        import re
+        html = curl(self.base + "/graficas/graficaVar.php", {
+            "puntos": var, "dfrom": start.strftime("%d/%m/%Y 00:00"), "dto": end.strftime("%d/%m/%Y 00:00"),
+            "source": "D", "VerLeyendas": "N"}, timeout=300).decode("utf-8", "ignore")
+        if "um:'m³/s'" not in html and "um:'m3/s'" not in html:
+            return None                                   # empty chart, or not a discharge variable
+        pts = re.findall(r"\{x:(\d+), y:(-?[\d.]+)[^}]*?fb:'(\d)'", html)
+        if not pts:
+            return None
+        d = pd.DataFrame(pts, columns=["t", "q", "fb"])
+        d = d[d.fb == "1"]
+        return pd.Series(d.q.astype(float).values, index=pd.to_datetime(d.t.astype("int64"), unit="ms").dt.normalize())
+
+    def daily(self, sig, start, end):
+        out = {}
+        for code, variables in sig.items():
+            for var in variables:
+                try:
+                    q = self._series(var, start, end)
+                except Exception as e:
+                    log(f"    {code}/{var}: {e}")
+                    q = None
+                if q is not None and len(q):
+                    out[code] = q[~q.index.duplicated()]
+                    break
+        log(f"    {len(out)}/{len(sig)} stations with daily discharge")
+        return pd.DataFrame(out).sort_index()
+
+
 def norm_code(c: str) -> str:
     """CEDEX writes some SAIH codes with a letter O where SAIH uses a zero (OA01 vs 0A01)."""
     c = str(c).strip().upper()
@@ -271,7 +328,7 @@ def norm_code(c: str) -> str:
 
 
 ADAPTERS = {"ebro": (SaihEbro, "Ebro"), "jucar": (SaihJucar, "Jucar"),
-            "guadalquivir": (SaihGuadalquivir, "Guadalquivir")}
+            "guadalquivir": (SaihGuadalquivir, "Guadalquivir"), "segura": (SaihSegura, "Segura")}
 
 
 def main():

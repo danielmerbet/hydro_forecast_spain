@@ -249,6 +249,14 @@ Design notes from building it:
   AIFS 50-member ensemble provides the uncertainty band.
 * Without state updating, GR4J started forecasts after a dry summer from an
   empty routing store (≈0 m³/s where the Ter carried 3 m³/s).
+* **WeatherNext 3 licence.** Forecast data (valid < 1 h ago and future) fall under
+  the GDM Real-Time Weather Forecasting Experimental Data Terms of Use
+  (https://storage.googleapis.com/weathernext-public/terms-of-use.pdf). River
+  discharge derived from it is a *non-retrievable Value Added Service* and may be
+  published with the citation of §4(b), which the site shows. WeatherNext
+  weather fields themselves — including catchment-averaged rain — count as
+  unmodified data and must NOT be published: `data/forecasts/` is git-ignored
+  and `docs/data/*.json` contain discharge only. Keep it that way.
 * Google's framework validates every lead of the past year's forecast inputs;
   for the last 10 issue dates, leads valid after today take today's forecast.
 
@@ -260,7 +268,7 @@ Same pipeline, `--domain spain` (bounding box and paths in `config/settings.yaml
 
 ```bash
 python codes/01b_download_cedex_anuario.py            # 1,174 CEDEX gauges, daily to 2022-09-30
-python codes/01c_download_saih.py --basin ebro         # recent data: ebro | jucar | guadalquivir
+python codes/01c_download_saih.py --basin ebro         # recent data: ebro | jucar | guadalquivir | segura
 python codes/01d_merge_spain_obs.py                    # CEDEX + SAIH, overlap-checked, QC
 python codes/02_delineate_catchments.py --domain spain # 1,154 catchments (HydroSHEDS 90 m)
 python codes/02b_plot_spain_gauges.py                  # Figure 2
@@ -291,8 +299,8 @@ python codes/05_calibrate_gr4j.py --domain spain --precip none
 | Guadiana | 73 | 0.67 | – | – |
 | Júcar | 48 | 0.58 | 34 | 0.12 |
 | Guadalquivir | 59 | 0.55 | 18 | 0.21 |
-| Segura | 37 | 0.14 | – | – |
-| **All** | **863** | **0.72** | **241** | **0.52** |
+| Segura | 37 | 0.14 | 30 | 0.06 |
+| **All** | **863** | **0.72** | **271** | **0.45** |
 
 Near-natural catchments (474) reach a median test KGE of 0.54, regulated ones
 (389) 0.45. The semi-arid, heavily managed south-east (Segura, lower Júcar,
@@ -301,8 +309,9 @@ a rainfall-runoff model without water-management knowledge fails.
 
 Status of every basin authority's live-data system, and the rules followed
 when using them, are in `docs/spain_extension_plan.md`. In short: Ebro,
-Júcar and Guadalquivir are connected; Miño-Sil offers only ~3 weeks of history
-(to be archived by the daily run); Segura needs a terms-of-use acceptance;
+Júcar, Guadalquivir and Segura (terms of use accepted; cite CHS) are
+connected; Miño-Sil offers only ~3 weeks of history (to be archived by the
+daily run);
 Cantábrico's download page is deliberately obfuscated (formal data request
 instead); Tajo, Duero and Guadiana are pending.
 

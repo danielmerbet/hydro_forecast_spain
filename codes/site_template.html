@@ -73,7 +73,17 @@ thead th { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing
       <h2 style="font-size:15px">All gauges by alert level</h2>
       <div class="list" id="list"></div>
     </div>
-    <p class="note">Flood levels are 2-, 5- and 20-year return levels of <b>daily mean</b> discharge (Gumbel fit to observed annual maxima); instantaneous peaks are higher. Models do not know dam operations: forecasts below reservoirs are indicative. GR4J forecasts start from the latest observed discharge. Test-period skill (Oct 2023 onward, ERA5-Land weather) is shown per gauge. Data: ACA, Google DeepMind WeatherNext 3, ECMWF (CC BY 4.0). Code: numbered scripts in this repository.</p>
+    <p class="note" style="border:1px solid var(--rule);padding:8px 10px;border-radius:4px">
+      <b>Experimental research forecasts — not official warnings.</b> For flood warnings follow the
+      Agència Catalana de l'Aigua, Protecció Civil de Catalunya and AEMET. This site is not endorsed by Google,
+      ECMWF or any meteorological or water agency.
+      WeatherNext 3 accessed through Google Earth Engine: © 2024-6 Google LLC, whose machine learning models were used
+      to create the experimental data made available under the following licence terms
+      <a href="https://storage.googleapis.com/weathernext-public/terms-of-use.pdf">https://storage.googleapis.com/weathernext-public/terms-of-use.pdf</a>.
+      This data is intended for experimental modelling only and is not intended, validated, or approved for real world use.
+      ECMWF AIFS open data © ECMWF, CC BY 4.0. Observations: Agència Catalana de l'Aigua.
+      Only river discharge derived by hydrological models is published here; no weather-model fields are redistributed.</p>
+    <p class="note">Flood levels are 2-, 5- and 20-year return levels of <b>daily mean</b> discharge (Gumbel fit to observed annual maxima); instantaneous peaks are higher. Models do not know dam operations: forecasts below reservoirs are indicative. GR4J forecasts start from the latest observed discharge. Test-period skill (Oct 2023 onward, ERA5-Land weather) is shown per gauge. Code: numbered scripts in this repository.</p>
   </aside>
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
