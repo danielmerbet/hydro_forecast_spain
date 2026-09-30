@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Catalan River Forecast</title>
+<title>River Forecast Spain</title>
 <link rel="icon" href="data:,">
-<meta name="description" content="Daily 15-day river discharge forecasts for Catalonia's internal basins: GR4J and Google's hydrology model driven by WeatherNext 3 and ECMWF AIFS.">
+<meta name="description" content="Daily 15-day river discharge forecasts for Spain's river gauges: GR4J and Google's hydrology model driven by WeatherNext 3 and ECMWF AIFS.">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
@@ -39,6 +39,8 @@ h2 { font-size: 17px; margin: 0; font-weight: 600; text-wrap: balance; }
 .chip { font: 500 12px/1 var(--mono); border: 1px solid var(--rule); border-radius: 3px; padding: 5px 7px; font-variant-numeric: tabular-nums; }
 .lvl { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
 .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; border: 1.5px solid var(--panel); box-shadow: 0 0 0 1px var(--rule); }
+.ring1 { box-shadow: 0 0 0 2.5px var(--lv1); } .ring2 { box-shadow: 0 0 0 2.5px var(--lv2); } .ring3 { box-shadow: 0 0 0 2.5px var(--lv3); }
+#search { width: 100%; margin: 6px 0; padding: 6px 8px; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; }
 .nolv { background: transparent; border: 2px solid var(--lv0); box-shadow: none; }
 .l0 { background: var(--lv0); } .l1 { background: var(--lv1); } .l2 { background: var(--lv2); } .l3 { background: var(--lv3); }
 #chart { width: 100%; height: 400px; }
@@ -59,32 +61,35 @@ thead th { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing
 </head>
 <body>
 <header>
-  <h1>Catalan River Forecast</h1>
+  <h1>River Forecast Spain</h1>
   <span class="issued" id="issued">loading…</span>
   <span class="sub">15-day daily discharge · GR4J and Google's hydrology model · WeatherNext 3 and ECMWF AIFS</span>
 </header>
 <main>
   <div id="map" role="region" aria-label="Map of river gauges"></div>
   <aside>
-    <div id="gauge-head"><h2>Select a gauge on the map</h2><div class="sub">Colours show the highest flood level reached by the forecast medians in the next 7 days.</div></div>
+    <div id="gauge-head"><h2>Select a gauge on the map</h2><div class="sub">Colours show the highest flood level reached by the forecast medians of GR4J and Google's fine-tuned model; a ring shows a higher level within reach of the AIFS ensemble's 95 % bound.</div></div>
     <div id="chart" aria-label="Forecast hydrograph"></div>
     <div id="thresholds" class="chips"></div>
     <div id="skill"></div>
     <div>
       <h2 style="font-size:15px">All gauges by alert level</h2>
+      <input id="search" type="search" placeholder="Filter by name, river, basin or code" aria-label="Filter gauges">
       <div class="list" id="list"></div>
     </div>
     <p class="note" style="border:1px solid var(--rule);padding:8px 10px;border-radius:4px">
-      <b>Experimental research forecasts — not official warnings.</b> For flood warnings follow the
-      Agència Catalana de l'Aigua, Protecció Civil de Catalunya and AEMET. This site is not endorsed by Google,
-      ECMWF or any meteorological or water agency.
+      <b>Experimental research forecasts — not official warnings.</b> For flood warnings follow AEMET, Protección Civil,
+      the Confederaciones Hidrográficas (SAIH) and, in Catalonia, the Agència Catalana de l'Aigua. This site is not endorsed
+      by Google, ECMWF or any meteorological or water agency.
       WeatherNext 3 accessed through Google Earth Engine: © 2024-6 Google LLC, whose machine learning models were used
       to create the experimental data made available under the following licence terms
       <a href="https://storage.googleapis.com/weathernext-public/terms-of-use.pdf">https://storage.googleapis.com/weathernext-public/terms-of-use.pdf</a>.
       This data is intended for experimental modelling only and is not intended, validated, or approved for real world use.
-      ECMWF AIFS open data © ECMWF, CC BY 4.0. Observations: Agència Catalana de l'Aigua.
+      ECMWF AIFS open data © ECMWF, CC BY 4.0. Observations (model calibration, flood levels, state updating):
+      Agència Catalana de l'Aigua; CEDEX Anuario de Aforos (MITECO); SAIH Ebro (CHE), SAIH Júcar (CHJ),
+      SAIH Guadalquivir (CHG) and SAIH Segura (fuente: Confederación Hidrográfica del Segura, datos provisionales).
       Only river discharge derived by hydrological models is published here; no weather-model fields are redistributed.</p>
-    <p class="note">Flood levels are 2-, 5- and 20-year return levels of <b>daily mean</b> discharge (Gumbel fit to observed annual maxima); instantaneous peaks are higher. Models do not know dam operations: forecasts below reservoirs are indicative. GR4J forecasts start from the latest observed discharge. Test-period skill (Oct 2023 onward, ERA5-Land weather) is shown per gauge. Plots start today; past days are not shown. Code: numbered scripts in this repository.</p>
+    <p class="note">Flood levels are 2-, 5- and 20-year return levels of <b>daily mean</b> discharge (Gumbel fit to observed annual maxima); instantaneous peaks are higher. Map colour: highest level reached by the forecast medians of GR4J (WeatherNext 3, AIFS, AIFS ensemble) and Google's fine-tuned model over the whole forecast; Google's released model is plotted for comparison only (it roughly doubles observed volumes in the test period). Models do not know dam operations: forecasts below reservoirs are indicative. GR4J starts from the latest observed discharge where a live feed exists (ACA, SAIH Ebro, Júcar, Guadalquivir, Segura); elsewhere it runs without that correction. Plots start today.</p>
   </aside>
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -92,8 +97,11 @@ thead th { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing
 <script>
 const LV = ["below 2-year level", "above 2-year level", "above 5-year level", "above 20-year level"];
 const NOLV = "no flood levels (short record)";
-const lvText = g => g.has_levels === false ? NOLV : LV[g.level];
-const dotCls = g => g.has_levels === false ? "dot nolv" : `dot l${g.level}`;
+const NOSK = "no skilful model here (forecast for information only)";
+const hollow = g => g.has_levels === false || g.skilful === false;
+const lvText = g => g.skilful === false ? NOSK : g.has_levels === false ? NOLV : LV[g.level]
+  + (g.possible > g.level ? ` · ${LV[g.possible].replace("above", "possibly above")} (AIFS ensemble 95 %)` : "");
+const dotCls = g => hollow(g) ? "dot nolv" : `dot l${g.level}` + (g.possible > g.level ? ` ring${g.possible}` : "");
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const MODEL = {
   gr4j_wn3: ["GR4J · WeatherNext 3", "--m-gr4j", "solid"],
@@ -102,31 +110,41 @@ const MODEL = {
   google_released: ["Google (released)", "--m-released", "solid"],
   google_finetuned: ["Google (fine-tuned)", "--m-finetuned", "solid"],
 };
-const SKILL = {gr4j: "GR4J", google_baseline: "Google (released)", google_finetuned: "Google (fine-tuned)"};
-let DATA, markers = {};
+const SKILL = {gr4j: "GR4J (test, Oct 2023 →)", gr4j_cal: "GR4J (calibration 2008–22)",
+               google_baseline: "Google released (test)", google_finetuned: "Google fine-tuned (test)"};
+let DATA, CATS = null, map, catLayer = null, markers = {};
 
 function band(x, lo, hi, color, group) {
   return {x: x.concat([...x].reverse()), y: lo.concat([...hi].reverse()), fill: "toself", fillcolor: color + "33", mode: "lines",
           line: {width: 0}, hoverinfo: "skip", legendgroup: group, showlegend: false, type: "scatter"};
 }
+function drawCatchment(id) {
+  if (!CATS || !map) return;
+  if (catLayer) map.removeLayer(catLayer);
+  const f = CATS[id]; if (!f) return;
+  catLayer = L.geoJSON(f, {style: {color: css("--m-gr4j"), weight: 1.5, fillOpacity: 0.08}, interactive: false}).addTo(map);
+}
 function show(id) {
   const g = DATA.gauges[id]; if (!g) return;
   try { localStorage.setItem("gauge", id); } catch (e) {}
+  drawCatchment(id);
+  const upd = g.updated === false ? " · no live observations: forecast not corrected to observed flow" : "";
   document.getElementById("gauge-head").innerHTML =
-    `<h2>${g.name} <span class="sub">(${g.river})</span></h2>
-     <div class="sub">${id} · ${g.area_km2} km² · ${g.regulated ? "regulated (reservoir upstream)" : "near-natural"}</div>
-     <div class="lvl" style="margin-top:6px"><span class="${dotCls(g)}"></span>${lvText(g)} · 7-day peak ${g.peak7 ?? "–"} m³/s</div>`;
+    `<h2>${g.name} <span class="sub">(${g.label})</span></h2>
+     <div class="sub">${id} · ${g.area_km2} km² · ${g.regulated ? "regulated (reservoir upstream)" : "near-natural"}${upd}</div>
+     <div class="lvl" style="margin-top:6px"><span class="${dotCls(g)}"></span>${lvText(g)} · forecast peak ${g.peak ?? "–"} m³/s</div>`;
   const tr = [];
+  const gf = DATA.meta.domains?.[g.domain]?.google_forcing || DATA.meta.google_forcing || "AIFS + WN3";
   for (const [k, s] of Object.entries(g.series)) {
     const [base, col, dash] = MODEL[k]; const c = css(col); const x = s.dates || g.fc_dates;
-    const label = k.startsWith("google") ? `${base} · ${DATA.meta.google_forcing || "AIFS + WN3"}` : base;
+    const label = k.startsWith("google") ? `${base} · ${gf}` : base;
     if (s.q05) tr.push(band(x, s.q05, s.q95, c, k));
     tr.push({x, y: s.q50, name: label + (s.q05 ? " (median, 5–95 % band)" : ""), legendgroup: k, mode: "lines",
              type: "scatter", line: {color: c, width: 2, dash}});
   }
   // y-axis follows the data; a flood-level line is drawn (and labelled) only if it is within reach
   const vals = tr.flatMap(t => t.y || []).filter(v => v !== null && isFinite(v));
-  const ymax = Math.max(1, ...vals) * 1.15;
+  const ymax = Math.max(0.1, ...vals) * 1.15;
   const lv = Object.entries(g.levels || {}).filter(([k, v]) => v <= ymax * 1.5);
   const lvCol = k => css({T2: "--lv1", T5: "--lv2", T20: "--lv3"}[k]);
   const shapes = lv.map(([k, v]) => ({type: "line", xref: "paper",
@@ -145,37 +163,55 @@ function show(id) {
   document.getElementById("thresholds").innerHTML = (Object.entries(g.levels || {}).map(([k, v]) =>
     `<span class="chip"><span class="dot l${{T2: 1, T5: 2, T20: 3}[k]}"></span> ${k.replace("T", "")}-year level ${v} m³/s</span>`).join("")
     || `<span class="chip">${NOLV}</span>`)
-    + `<div class="note" style="flex-basis:100%">Dotted lines: flood levels of daily mean flow. Lines: forecast medians; shaded: 5–95 % range. The map colour uses the medians over days 1–7.</div>`;
+    + `<div class="note" style="flex-basis:100%">Dotted lines: flood levels of daily mean flow. Lines: forecast medians; shaded: 5–95 % range.</div>`;
   const rows = Object.entries(g.skill || {}).filter(([k]) => SKILL[k]).map(([k, v]) =>
     `<tr><td>${SKILL[k]}</td><td>${v.KGE ?? "–"}</td><td>${v.NSE ?? "–"}</td></tr>`).join("");
-  document.getElementById("skill").innerHTML = rows ? `<table><thead><tr><th>Test-period skill</th><th>KGE</th><th>NSE</th></tr></thead><tbody>${rows}</tbody></table>` : "";
+  document.getElementById("skill").innerHTML = rows ? `<table><thead><tr><th>Skill (ERA5-Land weather)</th><th>KGE</th><th>NSE</th></tr></thead><tbody>${rows}</tbody></table>` : "";
+}
+function renderList(ids) {
+  const q = (document.getElementById("search").value || "").toLowerCase();
+  const sel = ids.filter(id => { const g = DATA.gauges[id];
+    return !q || `${id} ${g.name} ${g.label} ${g.authority}`.toLowerCase().includes(q); });
+  document.getElementById("list").innerHTML = sel.slice(0, 400).map(id => { const g = DATA.gauges[id];
+    return `<button data-id="${id}"><span><span class="${dotCls(g)}"></span> ${g.name} <span class="sub">(${g.label})</span></span><span class="sub">${g.peak ?? "–"} m³/s</span></button>`; }).join("")
+    + (sel.length > 400 ? `<div class="note">${sel.length - 400} more — refine the filter</div>` : "");
+  document.querySelectorAll(".list button").forEach(b => b.addEventListener("click", () => {
+    const g = DATA.gauges[b.dataset.id]; show(b.dataset.id); if (map) map.setView([g.lat, g.lon], Math.max(map.getZoom(), 9)); }));
 }
 fetch("data/latest.json").then(r => r.json()).then(d => {
   DATA = d;
+  const noWn3 = Object.entries(d.meta.domains || {}).filter(([k, m]) => !m.weathernext3).map(([k]) => k);
   document.getElementById("issued").textContent = `Forecast issued ${d.meta.issued} (runs ${d.meta.init.slice(0, 8)} 00 UTC)`
-    + (d.meta.weathernext3 === false ? " · WeatherNext 3 not available today: AIFS only" : "");
-  const map = L.map("map", {zoomControl: true}).setView([41.85, 2.1], 8);
+    + (noWn3.length ? ` · WeatherNext 3 not available today${Object.keys(d.meta.domains).length > 1 ? " for " + noWn3.join(", ") : ""}: AIFS only` : "");
+  map = L.map("map", {zoomControl: true, preferCanvas: true}).setView([40.3, -3.6], 6);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 13, attribution: "© OpenStreetMap"}).addTo(map);
   fetch("data/gauges.geojson").then(r => r.json()).then(geo => {
-    L.geoJSON(geo.catchments, {style: {color: css("--m-gr4j"), weight: 0.6, fillOpacity: 0.04}}).addTo(map);
-    for (const f of geo.features) {
+    const byLevel = [...geo.features].sort((a, b) => a.properties.level - b.properties.level);   // alerts drawn on top
+    for (const f of byLevel) {
       const id = f.properties.id, g = d.gauges[id], [lon, lat] = f.geometry.coordinates;
-      const nolv = g.has_levels === false;
+      const nolv = hollow(g), ring = g.possible > g.level;
       const m = L.circleMarker([lat, lon], nolv
-        ? {radius: 5, color: css("--lv0"), weight: 2, fillColor: css("--panel"), fillOpacity: 1}
-        : {radius: 6 + 2 * g.level, color: css("--panel"), weight: 1.5, fillColor: css(`--lv${g.level}`), fillOpacity: 1}).addTo(map);
-      m.bindTooltip(`${g.name} (${g.river}) — ${lvText(g)}`); m.on("click", () => show(id)); markers[id] = m;
+        ? {radius: 4, color: css("--lv0"), weight: 1.5, fillColor: css("--panel"), fillOpacity: 1}
+        : {radius: 5 + 2 * g.level, color: ring ? css(`--lv${g.possible}`) : css("--panel"), weight: ring ? 3 : 1,
+           fillColor: css(`--lv${g.level}`), fillOpacity: 1}).addTo(map);
+      m.bindTooltip(`${g.name} (${g.label}) — ${lvText(g)}`); m.on("click", () => show(id)); markers[id] = m;
     }
     const lg = L.control({position: "bottomleft"});
     lg.onAdd = () => { const el = L.DomUtil.create("div", "legend");
       el.innerHTML = LV.map((t, i) => `<span class="dot l${i}"></span> ${t}`).join("<br>")
-        + `<br><span class="dot nolv"></span> ${NOLV}`; return el; };
+        + `<br><span class="dot l0 ring3"></span> ring: higher level possible (AIFS ensemble 95 %)`
+        + `<br><span class="dot nolv"></span> no flood levels, or no skilful model`; return el; };
     lg.addTo(map);
+    fetch("data/catchments.geojson").then(r => r.json()).then(c => {
+      CATS = Object.fromEntries(c.features.map(f => [f.properties.gauge_id, f]));
+      const cur = (() => { try { return localStorage.getItem("gauge"); } catch (e) { return null; } })();
+      if (cur && d.gauges[cur]) drawCatchment(cur);
+    });
   });
-  const ids = Object.keys(d.gauges).sort((a, b) => d.gauges[b].level - d.gauges[a].level || (d.gauges[b].peak7 ?? 0) - (d.gauges[a].peak7 ?? 0));
-  document.getElementById("list").innerHTML = ids.map(id => { const g = d.gauges[id];
-    return `<button data-id="${id}"><span><span class="${dotCls(g)}"></span> ${g.name} <span class="sub">(${g.river})</span></span><span class="sub">${g.peak7 ?? "–"} m³/s</span></button>`; }).join("");
-  document.querySelectorAll(".list button").forEach(b => b.addEventListener("click", () => show(b.dataset.id)));
+  const ids = Object.keys(d.gauges).sort((a, b) => d.gauges[b].level - d.gauges[a].level
+    || d.gauges[b].possible - d.gauges[a].possible || (d.gauges[b].peak ?? 0) - (d.gauges[a].peak ?? 0));
+  renderList(ids);
+  document.getElementById("search").addEventListener("input", () => renderList(ids));
   let start = "EA020"; try { start = localStorage.getItem("gauge") || start; } catch (e) {}
   show(d.gauges[start] ? start : ids[0]);
 });

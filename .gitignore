@@ -2,6 +2,7 @@
 data/raw/aca_opendata/
 data/raw/era5land/
 data/raw/era5land_grid_*/
+data/raw/era5land_means_*/
 data/raw/era5land_spain/
 data/raw/emo1/
 data/raw/cedex/
@@ -12,6 +13,10 @@ data/processed/**/*.parquet
 data/processed/google/dynamics/
 data/processed/google/runs/
 data/processed/spain/*.gpkg
+!data/processed/spain/catchments.gpkg
+data/processed/spain/google/dynamics/
+data/processed/spain/google/runs/
+data/processed/spain/google/statics/streamflow.zarr/
 external/
 
 # ---- large per-gauge figures and the phase-1 report bundle (rebuilt by 05b/08/09)
@@ -25,6 +30,7 @@ outputs/report/
 # data/processed/*.csv            stations, attributes, hypsometry, EMO-1 factors
 # data/processed/gr4j/**/parameters.csv
 # data/processed/google/statics/  Google model static attributes / targets
+# data/processed/spain/catchments.gpkg, spain/google/statics/attributes.zarr, */flood_levels.csv
 # models/google_finetuned/        fine-tuned weights (13 MB)
 # docs/                           the published website
 

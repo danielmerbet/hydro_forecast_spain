@@ -1,4 +1,4 @@
-# River forecasts for Catalonia — GR4J vs Google's hydrology model
+# River forecasts for Spain — GR4J vs Google's hydrology model
 
 Daily streamflow simulation and (next phase) forecasting at the river gauges of
 Catalonia's internal basins (*Conques Internes*, operated by the Agència
@@ -14,11 +14,12 @@ Catalana de l'Aigua, ACA), with two hydrological models side by side:
 Both models are driven by **exactly the same weather** (ERA5-Land, averaged over
 each catchment), so differences in skill come from the models, not their inputs.
 
-The end goal is an interactive web map (in the style of Google's
+The result is an interactive web map (in the style of Google's
 [Flood Hub](https://sites.research.google/floods/)) on GitHub Pages, updated every
 day with forecasts driven by **WeatherNext 3** (Google DeepMind) and **AIFS**
-(ECMWF). That is phase 2; this README documents phase 1 (calibration and
-model comparison) in full, and the plan for phase 2.
+(ECMWF), for the 64 Catalan (ACA) gauges and 863 gauges in the rest of Spain
+(CEDEX network). Phase 1 (calibration and model comparison, Catalonia) is in
+sections 2–6, the daily forecast in section 7, the Spain-wide extension in 7b.
 
 ---
 
@@ -239,8 +240,8 @@ resolve that storm. Full figures: the phase-1 report page built by script 09.
 | 10 | `10_fetch_weathernext3.py` | Latest complete 00 UTC WeatherNext 3 run from Earth Engine (0.1°, hourly, 15 days, ensemble mean), aggregated to daily catchment means with the same weights as ERA5-Land (same grid). Net radiation and pressure by FAO-56 (eqs. 7, 37–40; tested). The 64 members are only in a requester-pays bucket and are not used. |
 | 11 | `11_fetch_aifs.py` | ECMWF AIFS 00 UTC open data: deterministic (all variables, 6-hourly) + 50-member AIFS-ENS rain at daily steps. Units read from each GRIB. |
 | 12 | `12_run_gr4j_forecast.py` | GR4J from ERA5-Land, ERA5-Land's ~7-day lag **bridged** with day-0 fields of each day's run (WeatherNext 3, or AIFS from ECMWF's Google Cloud/AWS mirrors when WeatherNext 3 is not readable), **routing-store updating** to the last observed flow (GRP-style, Berthet et al. 2009), then 15-day forecasts: WN3, AIFS, AIFS-ENS (quantiles of 50 runs). |
-| 13 | `13_run_google_forecast.py` | Google's model (released and fine-tuned), 7 days: AIFS in the HRES slots, WeatherNext 3 in the GraphCast slots (AIFS in both when WeatherNext 3 is unavailable: the model accepts a missing product only where ERA5-Land can replace it, never in the future), ERA5-Land + bridge for the past year. |
-| 14 | `14_build_site.py` + `site_template.html` | Static site in `docs/`: map of gauges coloured by forecast flood level (2/5/20-year return levels of daily flow, Gumbel fit to observed annual maxima), hydrograph panel with every model, per-gauge test-period skill, 30 days of archives. |
+| 13 | `13_run_google_forecast.py` | Google's model, 7 days (Catalonia: released and fine-tuned; Spain: released — the fine-tuned weights were trained on Catalan gauges only): AIFS in the HRES slots, WeatherNext 3 in the GraphCast slots (AIFS in both when WeatherNext 3 is unavailable: the model accepts a missing product only where ERA5-Land can replace it, never in the future), ERA5-Land + bridge for the past year. |
+| 14 | `14_build_site.py` + `site_template.html` | Static site in `docs/` for all domains: map of gauges coloured by forecast flood level (2/5/20-year return levels of daily flow, Gumbel fit to observed annual maxima), hydrograph panel with every model (forecast days only), per-gauge skill, 30 days of archives. **Colour** = highest level reached by the *medians* of GR4J (WN3, AIFS, AIFS-ENS) and Google fine-tuned over the whole forecast; a **ring** = a higher level reached by the 95 % bound of GR4J with the 50 AIFS members. Google's released model is plotted but does not set the colour (test-period volume bias +98 % in Catalonia; its 95 % bound reached 640 m³/s at Santa Coloma where the 20-year level is 140). Grey = below the 2-year level; hollow = no levels (record < 8 years). |
 | — | `run_daily.sh`, `.github/workflows/daily.yml` | The daily chain on GitHub Actions at 13:30 UTC, publishing to GitHub Pages. Setup and troubleshooting: **OPERATIONS.md**. |
 
 Design notes from building it:
@@ -319,6 +320,24 @@ CEDEX-specific QC: its values are rounded to 2–3 decimals and already checked
 by CEDEX, so only runs of ≥ 90 identical days are removed there (the 5-day rule
 used for 5-minute-derived series would have deleted 2 million genuine
 low-flow days).
+
+### Spain in the daily forecast
+
+Built once (locally; the outputs needed daily are committed):
+
+```bash
+python codes/04_catchment_attributes.py --domain spain --google  # + 84 Google statics (HydroATLAS, climate indices)
+python codes/06_build_google_dataset.py --domain spain            # Google inputs (statics committed)
+python codes/14_build_site.py                                    # also writes data/processed/spain/flood_levels.csv
+```
+
+Every day (`run_daily.sh`): SAIH Ebro, Júcar, Guadalquivir and Segura last 10
+days (`01c --recent 10`) → ERA5-Land (monthly catchment means cached, grids
+dropped) → WeatherNext 3 and AIFS cropped to Spain → GR4J for the 863
+calibrated gauges (state updating at the ~270 gauges with a verified or
+unverified SAIH join; the others run without it and the page says so) →
+Google's released model → one site with Catalonia and Spain. A failure in a
+Spain step drops Spain from that day's site but never blocks Catalonia.
 
 ---
 

@@ -9,12 +9,16 @@ Every day at 13:30 UTC the workflow `.github/workflows/daily.yml` runs
 | Step | Script | Source | Time |
 |---|---|---|---|
 | Observations | `01_download_aca_gauges.py --recent 10` | ACA open data | ~1 min (cached months) |
-| Reanalysis | `03_extract_era5land_forcing.py --start 2003-01-01` | ERA5-Land, Earth Engine | ~5 min (grid cache) |
-| WeatherNext 3 (optional) | `10_fetch_weathernext3.py` | Earth Engine (approved access) | ~1 min |
-| AIFS | `11_fetch_aifs.py` | ECMWF open data (CC BY 4.0) | ~5 min, ~1 GB download, deleted after |
-| GR4J | `12_run_gr4j_forecast.py` | bridge days + state updating | ~3 min |
-| Google model | `13_run_google_forecast.py` | released + fine-tuned weights, CPU | ~3 min |
-| Website | `14_build_site.py` | → `docs/` | seconds |
+| Observations (Spain) | `01c_download_saih.py --basin <b> --recent 10` | SAIH Ebro, Júcar, Guadalquivir, Segura | ~1 min |
+| Reanalysis | `03_extract_era5land_forcing.py --domain <d> --start 2003-01-01 --drop-grids` | ERA5-Land, Earth Engine | first run ~5 min per domain, then < 1 min (monthly means cached) |
+| WeatherNext 3 (optional) | `10_fetch_weathernext3.py --domain <d>` | Earth Engine (approved access) | < 1 min |
+| AIFS | `11_fetch_aifs.py --domain <d>` | ECMWF open data (CC BY 4.0) | ~5-15 min, ~1 GB download once for both domains, deleted after |
+| GR4J | `12_run_gr4j_forecast.py --domain <d>` | bridge days + state updating | ~10 s Catalonia, a few min Spain |
+| Google model | `13_run_google_forecast.py --domain <d>` | Catalonia released + fine-tuned, Spain released; CPU | ~3 min Catalonia, longer for Spain |
+| Website | `14_build_site.py` | → `docs/` (both domains) | seconds |
+
+A failure in any Spain step only drops Spain from that day's site (yellow
+warning in the workflow); Catalonia failures stop the run.
 
 Why 13:30 UTC: WeatherNext 3 00 UTC runs are complete in Earth Engine
 ~7–13 h after initialisation; AIFS 00 UTC is available from ~07 UTC.
@@ -42,7 +46,8 @@ Why 13:30 UTC: WeatherNext 3 00 UTC runs are complete in Earth Engine
    `docs`.
 5. **First run**: Actions → *daily-forecast* → *Run workflow*. The first run
    has no caches and takes longer (ACA open data since 2023-10 and ERA5-Land
-   since 2003 are downloaded once, then cached by `actions/cache`).
+   since 2003 for both domains are downloaded once; afterwards only their
+   monthly catchment means, ~0.6 GB, are kept by `actions/cache`).
 
 ## If something fails
 

@@ -22,7 +22,15 @@ INPUTS (Caravan-MultiMet format, as in script 06, but for one issue date)
   IMERG, CPC: missing (the model is built to average over available products).
 MODELS
   released   the pretrained weights as published (script 07)
-  finetuned  the ACA fine-tuned weights (script 07b; Catalonia only)
+  finetuned  the ACA fine-tuned weights (script 07b; Catalonia only — it was
+             fine-tuned on Catalan gauges, so it is not applied to Spain)
+DOMAINS
+  catalonia  basins of data/processed/google/basins.txt
+  spain      basins of data/processed/spain/google/basins.txt (the gauges with
+             GR4J parameters; statics from 04 --google and 06 --domain spain)
+  Observed streamflow is not needed to forecast: an all-NaN target file for the
+  input window is written with the inputs, so only statics/attributes.zarr has
+  to be in the repository.
   Each forecast runs in a copy of the run directory, so the historical test
   results are never overwritten.
 OUTPUT
@@ -45,7 +53,7 @@ import pandas as pd
 import xarray as xr
 import yaml
 
-from hydrocat.config import DATA, PROCESSED, ROOT, P, load_settings
+from hydrocat.config import DATA, PROCESSED, ROOT, load_settings
 from hydrocat.forcing import load_forcing
 
 S = load_settings()
@@ -75,7 +83,7 @@ def write(ds, path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--domain", default="catalonia", choices=["catalonia"])
+    ap.add_argument("--domain", default="catalonia", choices=["catalonia", "spain"])
     ap.add_argument("--init", default=None)
     ap.add_argument("--gpu", type=int, default=-1)
     args = ap.parse_args()
@@ -87,15 +95,18 @@ def main():
     inp = work / "input"
     log(f"Google model forecast, runs of {init}, issue date {I.date()}")
 
-    basins = (P.google_dir / "basins.txt").read_text().split()
-    gids = [b.removeprefix("aca_") for b in basins]
+    s06 = _load("06_build_google_dataset")
+    gdir = s06.google_dir(args.domain)
+    basins = (gdir / "basins.txt").read_text().split()
+    gids = [b.removeprefix(s06.PREFIX[args.domain]) for b in basins]
     dates = pd.date_range(I - pd.Timedelta(days=420), I + pd.Timedelta(days=10), freq="D")   # noqa
 
     # --- past: ERA5-Land + bridge (same as GR4J)
     s12 = _load("12_run_gr4j_forecast")
-    era = load_forcing(args.domain, "none")
+    era = load_forcing(args.domain, "none", columns=["date", "gauge_id", *V])
+    era = era[era.date >= dates[0]]
     br = s12.bridge(args.domain, (era.date.max() + pd.Timedelta(days=1)).date(), I.date())
-    past = pd.concat([era, br], ignore_index=True)
+    past = pd.concat([era, br[["date", "gauge_id", *V]]], ignore_index=True)
     past = past[past.gauge_id.isin(gids) & (past.date >= dates[0]) & (past.date <= I)]
     era_ds = xr.Dataset({f"era5land_{v}": (("basin", "date"), past.pivot(index="date", columns="gauge_id", values=v)
                                            .reindex(index=dates, columns=gids).values.T.astype("float32")) for v in V},
@@ -143,17 +154,19 @@ def main():
                                 coords={"basin": basins, "date": dates})
     write(nan2("imerg_precipitation"), inp / "dynamics" / "IMERG" / "timeseries.zarr")
     write(nan2("cpc_precipitation"), inp / "dynamics" / "CPC" / "timeseries.zarr")
+    write(nan2("streamflow"), inp / "targets" / "streamflow.zarr")          # the future has no observations
 
     # --- run both model variants
-    area = pd.read_csv(P.attributes).set_index("gauge_id").loc[gids, "area_km2"].values
+    base = PROCESSED if args.domain == "catalonia" else PROCESSED / args.domain
+    area = pd.read_csv(base / "catchment_attributes.csv").set_index("gauge_id").loc[gids, "area_km2"].values
     # released weights: straight from Google's repository (cloned by 00_setup.sh);
     # fine-tuned weights: the committed copy in models/ (exported after script 07b)
     runs = {"google_released": ROOT / S["google"]["repo_dir"] / S["google"]["pretrained_runs"]["baseline"]}
     ft = ROOT / "models" / "google_finetuned"
     if not (ft / "config.yml").exists():
-        found = sorted((P.google_dir / "runs" / "finetuned").glob("finetuned_*/config.yml"))
+        found = sorted((gdir / "runs" / "finetuned").glob("finetuned_*/config.yml"))
         ft = found[-1].parent if found else None
-    if ft is not None:
+    if ft is not None and args.domain == "catalonia":
         runs["google_finetuned"] = ft
     frames = []
     fmt = lambda d: d.strftime("%d/%m/%Y")  # noqa: E731
@@ -172,10 +185,10 @@ def main():
         cfg = yaml.safe_load((src / "config.yml").read_text())
         if cfg.get("base_run_dir"):   # fine-tuned run: scaler lives in the base run -> this machine's path
             cfg["base_run_dir"] = str(ROOT / S["google"]["repo_dir"] / S["google"]["pretrained_runs"]["filtered"])
-        bf = str(P.google_dir / "basins.txt")
+        bf = str(gdir / "basins.txt")
         cfg.update(run_dir=str(rd), train_dir=str(rd / "train_data"), dynamics_data_dir=str(inp / "dynamics"),
                    train_basin_file=bf, validation_basin_file=bf, test_basin_file=bf,
-                   statics_data_dir=str(P.google_dir / "statics"), targets_data_dir=str(P.google_dir / "statics"),
+                   statics_data_dir=str(gdir / "statics"), targets_data_dir=str(inp / "targets"),
                    # the framework needs start < end: issue I-1 and I, keep only I below
                    test_start_date=fmt(I - pd.Timedelta(days=1)), test_end_date=fmt(I), n_samples=500,
                    device="cpu" if args.gpu < 0 else f"cuda:{args.gpu}", img_log_dir=str(rd / "img_log"),

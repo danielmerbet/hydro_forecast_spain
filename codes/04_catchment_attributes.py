@@ -77,13 +77,20 @@ def hypsometry(gdf) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["gauge_id"] + [f"p{p}" for p in pct])
 
 
-def hydroatlas(gdf, names) -> pd.DataFrame:
+def hydroatlas(gdf, names, tile_deg: float | None = None) -> pd.DataFrame:
+    """tile_deg: download the level-12 polygons in tiles (Spain: ~15,000 polygons,
+    too many for one request); polygons on tile edges are de-duplicated by HYBAS_ID."""
     x0, y0, x1, y1 = gdf.total_bounds
-    fc = ee.FeatureCollection("WWF/HydroATLAS/v1/Basins/level12").filterBounds(
-        ee.Geometry.Rectangle([x0, y0, x1, y1]))
     props = sorted(set(n for n in names if not n.endswith("_ERA5_LAND")) | {"dor_pc_pva", "HYBAS_ID"})
-    df = retry(ee.data.computeFeatures, {"expression": fc.select(props), "fileFormat": "GEOPANDAS_GEODATAFRAME"})
-    lev = df.set_crs("EPSG:4326")
+    boxes = [(x0, y0, x1, y1)] if not tile_deg else [
+        (x, y, min(x + tile_deg, x1), min(y + tile_deg, y1))
+        for x in np.arange(x0, x1, tile_deg) for y in np.arange(y0, y1, tile_deg)]
+    parts = []
+    for b in boxes:
+        fc = ee.FeatureCollection("WWF/HydroATLAS/v1/Basins/level12").filterBounds(ee.Geometry.Rectangle(list(b)))
+        parts.append(retry(ee.data.computeFeatures, {"expression": fc.select(props),
+                                                     "fileFormat": "GEOPANDAS_GEODATAFRAME"}))
+    lev = pd.concat(parts, ignore_index=True).drop_duplicates("HYBAS_ID").set_crs("EPSG:4326")
     log(f"   {len(lev)} level-12 BasinATLAS polygons")
     eq = "EPSG:3035"   # equal-area for weights
     inter = gpd.overlay(gdf[["gauge_id", "geometry"]].to_crs(eq), lev.to_crs(eq), how="intersection")
@@ -178,9 +185,11 @@ def cedex_reservoirs() -> gpd.GeoDataFrame:
     return gpd.GeoDataFrame(r, geometry=gpd.points_from_xy(r.lon, r.lat), crs="EPSG:4326")
 
 
-def spain_main():
-    """Spain: hypsometry (GR4J snow bands) and regulation flags. The 84 Google
-    statics for Spain are added when the Google model is run there."""
+def spain_main(google: bool = False):
+    """Spain: hypsometry (GR4J snow bands) and regulation flags; with google=True
+    also the 84 Google statics (HydroATLAS + Caravan climate indices, exactly
+    as for Catalonia) for the catchments with calibrated GR4J parameters, the
+    ones that are forecast."""
     D = S["domains"]["spain"]
     out_dir = ROOT / "data" / "processed" / "spain"
     gdf = gpd.read_file(ROOT / D["catchments"])
@@ -201,6 +210,20 @@ def spain_main():
     att["reservoirs_upstream"] = att.gauge_id.map(up).fillna("")
     att["n_reservoirs_upstream"] = att.gauge_id.map(j.groupby("gauge_id").size()).fillna(0).astype(int)
     att["regulated"] = att.n_reservoirs_upstream > 0
+    if google:
+        names = google_static_names()
+        fc_ids = set(pd.read_csv(out_dir / "gr4j" / "parameters.csv").gauge_id)
+        sub = gdf[gdf.gauge_id.isin(fc_ids)]
+        log(f"   Google statics for {len(sub)} catchments: HydroATLAS level-12 (tiled)")
+        ha = hydroatlas(sub, names, tile_deg=2.0)
+        log("   Caravan climate indices (ERA5-Land 1981-2020)")
+        cols = ["date", "gauge_id", "total_precipitation", "potential_evaporation", "temperature_2m"]
+        f = pd.read_parquet(ROOT / D["forcing"], columns=cols)
+        ci = climate_indices(f[f.gauge_id.isin(fc_ids)])
+        att = att.merge(ha, on="gauge_id", how="left").merge(ci, on="gauge_id", how="left")
+        miss = [n for n in names if n not in att or att.loc[att.gauge_id.isin(fc_ids), n].isna().any()]
+        if miss:
+            raise RuntimeError(f"missing Google static attributes: {miss}")
     att.to_csv(out_dir / "catchment_attributes.csv", index=False)
     log(f"-> spain/catchment_attributes.csv: {len(att)} catchments, {int(att.regulated.sum())} regulated "
         f"({len(res)} CEDEX reservoirs)")
@@ -212,10 +235,11 @@ def main():
     ap.add_argument("--domain", default="catalonia", choices=list(S["domains"]))
     ap.add_argument("--hypsometry-only", action="store_true",
                     help="only the elevation quantiles (all GR4J needs)")
+    ap.add_argument("--google", action="store_true", help="Spain: also the 84 Google model statics")
     args = ap.parse_args()
     init_ee()
     if args.domain == "spain":
-        return spain_main()
+        return spain_main(args.google)
     gdf = gpd.read_file(P.catchments)
     names = google_static_names()
     log(f"{len(gdf)} catchments, {len(names)} Google static attributes")

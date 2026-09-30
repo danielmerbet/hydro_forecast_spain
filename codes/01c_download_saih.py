@@ -35,6 +35,11 @@ ADAPTERS (status)
          Cantábrico's download page is obfuscated -> formal data request,
          Tajo uses per-session encrypted URLs).
 
+DAILY OPERATION (--recent N)
+  Only the last N days are downloaded and merged into the existing table (new
+  values replace old ones); the CEDEX overlap check is skipped (it was done
+  once on the full download). Used by run_daily.sh for GR4J state updating.
+
 Writes
   data/processed/spain/q_obs_daily_saih_<basin>.parquet   daily mean m3/s, columns = CEDEX gauge ids
   outputs/tables/qc_cedex_vs_saih_<basin>.csv
@@ -335,7 +340,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--basin", default="ebro", choices=list(ADAPTERS))
     ap.add_argument("--start", default="2021-10-01", help="overlap with CEDEX starts 2021-10-01")
+    ap.add_argument("--recent", type=int, default=None, help="only the last N days, merged into the table")
     args = ap.parse_args()
+    if args.recent:
+        args.start = (dt.date.today() - dt.timedelta(days=args.recent)).isoformat()
     cls, dem = ADAPTERS[args.basin]
     ad = cls()
 
@@ -353,7 +361,14 @@ def main():
     q = q.rename(columns=code2gauge)
     q.index.name = "date"
     q = q.clip(lower=0)
-    q.to_parquet(OUT / f"q_obs_daily_saih_{args.basin}.parquet")
+    f = OUT / f"q_obs_daily_saih_{args.basin}.parquet"
+    if args.recent:
+        if f.exists():
+            q = q.combine_first(pd.read_parquet(f))
+        q.to_parquet(f)
+        log(f"-> {f.name}: last {args.recent} days of {q.shape[1]} gauges merged (to {q.index.max().date()})")
+        return
+    q.to_parquet(f)
 
     cedex = pd.read_parquet(OUT / "q_obs_daily_cedex.parquet")
     qc = []

@@ -1,5 +1,10 @@
 # Extending the pipeline to all of Spain (decision of 2026-09-29)
 
+> **Status 2026-09-30:** the daily forecast and the web page cover Spain: 863
+> CEDEX gauges with calibrated GR4J (state updating at the ~270 gauges with a
+> SAIH Ebro/Júcar/Guadalquivir/Segura feed) and Google's released model, next
+> to the 64 ACA gauges. See README section 7b "Spain in the daily forecast".
+
 Scope chosen: **every Spanish gauge with usable data, including live data from
 each basin authority's SAIH**, so that GR4J and Google's model can be compared
 (and later forecast) nationwide, not only in Catalonia.

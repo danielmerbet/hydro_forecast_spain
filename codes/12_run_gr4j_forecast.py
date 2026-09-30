@@ -28,8 +28,14 @@
    (data/processed/gr4j/run_era5l_raw), i.e. the forcing type the forecasts
    also are; zero-flow thresholds (q0) applied as in calibration.
 
+   Gauges without a recent observation (most of Spain: no live SAIH feed)
+   run without updating (column `updated` = False).
+4. Speed: every input is pivoted once to (days x gauges) arrays; ~1 ms per
+   model run, so Spain's 863 gauges x 52 runs take a few minutes.
+
 Writes  data/forecasts/<domain>/gr4j/<init>/q_forecast.parquet
-        long: date, gauge_id, product, q (m3/s) [+ quantiles for aifs_ens]
+        long: date (forecast days only), gauge_id, product, q (m3/s)
+        [q05..q95 for aifs_ens], updated (state updating applied)
 """
 from __future__ import annotations
 
@@ -46,6 +52,7 @@ import pandas as pd
 from hydrocat.config import DATA, PROCESSED, ROOT, load_settings
 from hydrocat.forcing import load_forcing
 from hydrocat.gr4j import CatchmentModel
+from hydrocat.obs import observations
 
 S = load_settings()
 GR = S["gr4j"]
@@ -102,7 +109,7 @@ def bridge(domain, first: dt.date, last: dt.date) -> pd.DataFrame:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--domain", default="catalonia", choices=list(S["domains"]))
-    ap.add_argument("--init", default=None, help="YYYYMMDDHH of the forecast runs (default: latest common)")
+    ap.add_argument("--init", default=None, help="YYYYMMDDHH of the forecast runs (default: latest AIFS)")
     args = ap.parse_args()
     D = S["domains"][args.domain]
     base = PROCESSED if args.domain == "catalonia" else PROCESSED / args.domain
@@ -111,64 +118,83 @@ def main():
     d0 = pd.Timestamp(dt.datetime.strptime(init, "%Y%m%d%H").date())
     log(f"GR4J forecast, runs of {init}, domain {args.domain}")
 
-    era = load_forcing(args.domain, "none")
-    era = era[era.date >= S["periods"]["warmup_start"]]
+    rawdir = base / "gr4j" / "run_era5l_raw"
+    par = pd.read_csv((rawdir if rawdir.exists() else base / "gr4j") / "parameters.csv").set_index("gauge_id")
+    gids = list(par.index)
+    hy = pd.read_csv(base / "hypsometry.csv").set_index("gauge_id")
+    cat = gpd.read_file(ROOT / D["catchments"]).set_index("gauge_id")
+    q_obs = observations(args.domain)
+
+    era = load_forcing(args.domain, "none", columns=["date", "gauge_id", *VARS])
+    era = era[(era.date >= S["periods"]["warmup_start"]) & era.gauge_id.isin(gids)]
     last_era = era.date.max()
     br = bridge(args.domain, (last_era + pd.Timedelta(days=1)).date(), (d0 - pd.Timedelta(days=1)).date())
     log(f"   ERA5-Land to {last_era.date()}, bridge {len(br.date.unique()) if len(br) else 0} days"
         + (f" ({br.drop_duplicates('date').bridge_source.value_counts().to_dict()})" if len(br) else ""))
-    past = pd.concat([era[["date", "gauge_id", *VARS]], br[["date", "gauge_id", *VARS]]], ignore_index=True)
+    past = pd.concat([era, br[br.gauge_id.isin(gids)][["date", "gauge_id", *VARS]]], ignore_index=True)
+    del era
 
-    wf = fdir / "weathernext3" / init / "forcing.parquet"
-    wn3 = pd.read_parquet(wf) if wf.exists() else None
-    if wn3 is None:
-        log(f"   no WeatherNext 3 run for {init}: AIFS products only")
+    # every input as a (days, gauges) array, built once
+    def grid(df, dates):
+        return {v: df.pivot(index="date", columns="gauge_id", values=v).reindex(index=dates, columns=gids)
+                .to_numpy(float) for v in VARS}
+    past_dates = pd.date_range(past.date.min(), d0 - pd.Timedelta(days=1), freq="D")
+    H = grid(past, past_dates)
+    if np.isnan(H["total_precipitation"]).any():
+        raise RuntimeError("gaps in the ERA5-Land + bridge forcing before the forecast start")
+    fc_dates = pd.date_range(d0, periods=15, freq="D")
     aifs = pd.read_parquet(fdir / "aifs" / init / "forcing.parquet")
+    wf = fdir / "weathernext3" / init / "forcing.parquet"
+    scen = {"aifs": grid(aifs, fc_dates)}
+    if wf.exists():
+        scen = {"wn3": grid(pd.read_parquet(wf), fc_dates)} | scen
+    else:
+        log(f"   no WeatherNext 3 run for {init}: AIFS products only")
     ens_f = fdir / "aifs" / init / "precip_members.parquet"
-    ens = pd.read_parquet(ens_f) if ens_f.exists() else None
-
-    rawdir = base / "gr4j" / "run_era5l_raw"
-    par = pd.read_csv((rawdir if rawdir.exists() else base / "gr4j") / "parameters.csv").set_index("gauge_id")
-    hy = pd.read_csv(base / "hypsometry.csv").set_index("gauge_id")
-    cat = gpd.read_file(ROOT / D["catchments"]).set_index("gauge_id")
-    q_obs = pd.read_parquet(base / "q_obs_daily.parquet")
+    ens = None
+    if ens_f.exists():
+        e = pd.read_parquet(ens_f)
+        members = sorted(e.member.unique())
+        ens = np.stack([e[e.member == m].pivot(index="date", columns="gauge_id", values="total_precipitation")
+                        .reindex(index=fc_dates, columns=gids).to_numpy(float) for m in members])  # (m, days, g)
+    dates = past_dates.append(fc_dates)
+    n_past = len(past_dates)
 
     rows = []
-    for gid, p in par.iterrows():
+    for j, gid in enumerate(gids):
+        p = par.loc[gid]
         k = cat.area_km2[gid] / 86.4
-        hist = past[past.gauge_id == gid].sort_values("date")
-        scen = {"aifs": aifs} if wn3 is None else {"wn3": wn3, "aifs": aifs}
-        if ens is not None:
-            for mnum, e in ens[ens.gauge_id == gid].groupby("member"):
-                a = aifs[aifs.gauge_id == gid].drop(columns="total_precipitation").merge(
-                    e[["date", "total_precipitation"]], on="date")
-                scen[f"aifs_m{mnum:02d}"] = a
         params = [p.X1, p.X2, p.X3, p.X4, p.CTG, p.Kf]
         o = q_obs[gid][(d0 - pd.Timedelta(days=3)):(d0 - pd.Timedelta(days=1))].dropna() if gid in q_obs else []
-        upd_date, upd_mm = (o.index[-1], float(o.iloc[-1]) / k) if len(o) else (None, 0.0)
+        ui, upd_mm = ((dates.get_loc(o.index[-1]), float(o.iloc[-1]) / k) if len(o) else (-1, 0.0))
+        hyp = hy.loc[gid].values.astype(float)
+
+        def run(fc: dict, precip=None):
+            x = {v: np.concatenate([H[v][:, j], fc[v][:, j] if (v != "total_precipitation" or precip is None)
+                                    else precip]) for v in VARS}
+            m = CatchmentModel(x["total_precipitation"], x["temperature_2m"], x["temperature_2m_min"],
+                               x["temperature_2m_max"], x["pet_fao56"], hyp, GR["n_elevation_layers"])
+            q = m.run(params, ui, upd_mm)[n_past:] * k
+            return np.where(q < p.q0_m3s, 0.0, q)
+
         for name, fc in scen.items():
-            fc = fc[fc.gauge_id == gid] if "gauge_id" in fc else fc
-            s = pd.concat([hist, fc[["date", "gauge_id", *VARS]]]).sort_values("date")
-            m = CatchmentModel(s.total_precipitation.values, s.temperature_2m.values, s.temperature_2m_min.values,
-                               s.temperature_2m_max.values, s.pet_fao56.values, hy.loc[gid].values.astype(float),
-                               GR["n_elevation_layers"])
-            ui = int(np.searchsorted(s.date.values, np.datetime64(upd_date))) if upd_date is not None else -1
-            q = m.run(params, ui, upd_mm) * k
-            q = np.where(q < p.q0_m3s, 0.0, q)
-            sel = (s.date >= d0 - pd.Timedelta(days=60)).values                        # keep 60 past days for context
-            rows.append(pd.DataFrame({"date": s.date.values[sel], "gauge_id": gid, "product": name, "q": q[sel]}))
+            rows.append(pd.DataFrame({"date": fc_dates, "gauge_id": gid, "product": name, "q": run(fc),
+                                      "updated": ui >= 0}))
+        if ens is not None:
+            qm = np.stack([run(scen["aifs"], ens[i, :, j]) for i in range(len(ens))])
+            qs = np.quantile(qm, [0.05, 0.25, 0.5, 0.75, 0.95], axis=0)
+            rows.append(pd.DataFrame({"date": fc_dates, "gauge_id": gid, "product": "aifs_ens",
+                                      **{c: qs[i] for i, c in enumerate(["q05", "q25", "q50", "q75", "q95"])},
+                                      "updated": ui >= 0}))
+        if (j + 1) % 200 == 0:
+            log(f"   {j + 1}/{len(gids)} gauges")
     q = pd.concat(rows, ignore_index=True)
-    mem = q[q["product"].str.startswith("aifs_m")]
-    if len(mem):
-        qs = mem.groupby(["date", "gauge_id"]).q.quantile([0.05, 0.25, 0.5, 0.75, 0.95]).unstack()
-        qs.columns = ["q05", "q25", "q50", "q75", "q95"]
-        qs = qs.reset_index().assign(product="aifs_ens")
-        q = pd.concat([q[~q["product"].str.startswith("aifs_m")], qs], ignore_index=True)
     out = fdir / "gr4j" / init
     out.mkdir(parents=True, exist_ok=True)
     q.to_parquet(out / "q_forecast.parquet", index=False)
-    log(f"-> {out.relative_to(ROOT)}/q_forecast.parquet ({q.gauge_id.nunique()} gauges, "
-        f"products {sorted(q['product'].unique())})")
+    n_upd = q.drop_duplicates("gauge_id").updated.sum()
+    log(f"-> {out.relative_to(ROOT)}/q_forecast.parquet ({q.gauge_id.nunique()} gauges, {n_upd} updated to an "
+        f"observation, products {sorted(q['product'].unique())})")
 
 
 if __name__ == "__main__":

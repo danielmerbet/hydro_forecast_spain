@@ -17,7 +17,7 @@ concurrency:
 jobs:
   forecast:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     defaults:
       run:
         shell: bash -el {0}    # login shell so the conda env is active
@@ -33,15 +33,18 @@ jobs:
       - name: Install Google's model (pinned) and hydrocat
         run: bash codes/00_setup_ci.sh
 
-      - name: Restore data caches (ACA open data, ERA5-Land grids, bridge days)
+      - name: Restore data caches (ACA open data, ERA5-Land monthly means, bridge days, SAIH)
         uses: actions/cache@v4
         with:
           path: |
             data/raw/aca_opendata
-            data/raw/era5land_grid_catalonia
+            data/raw/era5land_means_catalonia
+            data/raw/era5land_means_spain
             data/forecasts/catalonia/bridge
-          key: data-${{ github.run_id }}
-          restore-keys: data-
+            data/forecasts/spain/bridge
+            data/processed/spain/q_obs_daily_saih_*.parquet
+          key: data-v2-${{ github.run_id }}
+          restore-keys: data-v2-
 
       - name: Run the daily chain
         env:

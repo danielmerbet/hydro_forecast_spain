@@ -28,11 +28,17 @@ HOW WE USE IT HERE (simulation / "hindcast" mode)
   receive WeatherNext 3 (GraphCast's successor at Google DeepMind), while the
   past stays ERA5-Land.
 
-Writes (data/processed/google/)
+DOMAINS
+  catalonia  ACA gauges with a modelled catchment, basin ids "aca_<gauge_id>"
+  spain      the CEDEX gauges with calibrated GR4J parameters (the forecast
+             ones), basin ids "es_<gauge_id>"; statics from
+             04_catchment_attributes.py --domain spain --google
+
+Writes (data/processed/google/ or data/processed/spain/google/)
   dynamics/{ERA5_LAND,HRES,GRAPHCAST,IMERG,CPC}/timeseries.zarr
   statics/attributes.zarr         basin x 84 attributes
   statics/streamflow.zarr         basin x date, observed streamflow (mm/day)
-  basins.txt                      basin ids ("aca_<gauge_id>")
+  basins.txt                      basin ids
 """
 from __future__ import annotations
 
@@ -44,11 +50,10 @@ import pandas as pd
 import xarray as xr
 import yaml
 
-from hydrocat.config import ROOT, P, load_settings
+from hydrocat.config import PROCESSED, ROOT, P, load_settings
 
 S = load_settings()
 warnings.filterwarnings("ignore", message=".*does not have a Zarr V3 specification.*")
-OUT = P.google_dir
 LEADS = pd.to_timedelta(np.arange(1, 11), unit="D")   # same as Google's MultiMet HRES/GRAPHCAST
 VARS = ["total_precipitation", "temperature_2m", "surface_pressure",
         "surface_net_solar_radiation", "surface_net_thermal_radiation"]
@@ -58,8 +63,15 @@ def log(*a):
     print(*a, flush=True)
 
 
-def basin_id(gid: str) -> str:
-    return f"aca_{gid}"
+PREFIX = {"catalonia": "aca_", "spain": "es_"}
+
+
+def google_dir(domain: str):
+    return P.google_dir if domain == "catalonia" else PROCESSED / domain / "google"
+
+
+def basin_id(gid: str, domain: str = "catalonia") -> str:
+    return f"{PREFIX[domain]}{gid}"
 
 
 def write_zarr(ds: xr.Dataset, path):
@@ -70,16 +82,28 @@ def write_zarr(ds: xr.Dataset, path):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--domain", default="catalonia", choices=list(PREFIX))
+    args = ap.parse_args()
+    OUT = google_dir(args.domain)
     cfg = yaml.safe_load((ROOT / S["google"]["repo_dir"] / S["google"]["pretrained_runs"]["baseline"]
                           / "config.yml").read_text())
-    att = pd.read_csv(P.attributes)
-    st = pd.read_csv(P.stations).set_index("gauge_id")
-    att = att[att.gauge_id.map(st["modelled"])]
+    if args.domain == "catalonia":
+        att = pd.read_csv(P.attributes)
+        st = pd.read_csv(P.stations).set_index("gauge_id")
+        att = att[att.gauge_id.map(st["modelled"])]
+        forcing_path, q_path = P.forcing, P.q_daily
+    else:
+        base = PROCESSED / args.domain
+        att = pd.read_csv(base / "catchment_attributes.csv")
+        att = att[att.gauge_id.isin(pd.read_csv(base / "gr4j" / "parameters.csv").gauge_id)]
+        forcing_path, q_path = ROOT / S["domains"][args.domain]["forcing"], base / "q_obs_daily.parquet"
     gids = list(att.gauge_id)
-    basins = [basin_id(g) for g in gids]
+    basins = [basin_id(g, args.domain) for g in gids]
     log(f"{len(basins)} basins")
 
-    forcing = pd.read_parquet(P.forcing)
+    forcing = pd.read_parquet(forcing_path, columns=["date", "gauge_id", *VARS])
     forcing = forcing[forcing.gauge_id.isin(gids)]
     dates = pd.date_range(forcing.date.min(), forcing.date.max(), freq="D")
 
@@ -113,7 +137,7 @@ def main():
     write_zarr(stat, OUT / "statics" / "attributes.zarr")
 
     # --- targets: m3/s -> mm/day (Caravan unit)
-    q = pd.read_parquet(P.q_daily).reindex(index=dates, columns=gids)
+    q = pd.read_parquet(q_path).reindex(index=dates, columns=gids)
     area = att.set_index("gauge_id").loc[gids, "area_km2"].values
     mm = q.values * 86.4 / area[None, :]
     tgt = xr.Dataset({"streamflow": (("basin", "date"), mm.T.astype("float32"))},

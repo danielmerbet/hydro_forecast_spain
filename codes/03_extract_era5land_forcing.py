@@ -46,12 +46,18 @@ Usage
   python codes/03_extract_era5land_forcing.py --domain spain --start 2003-01-01
 
 Writes   <domain forcing path in settings.yaml>   long table: date, gauge_id, variables
-Caches   data/raw/era5land_grid_<domain>/<YYYY-MM>.npz
+Caches   data/raw/era5land_grid_<domain>/<YYYY-MM>.npz      monthly grids
+         data/raw/era5land_means_<domain>/<YYYY-MM>.parquet catchment means of each
+            month (float32, raw ERA5-Land units), tagged with a hash of the
+            catchment polygons; ~1 MB/month for Spain vs ~12 MB of grid.
+            --drop-grids (used by the daily GitHub run) keeps only these.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
+import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import ee
@@ -148,10 +154,13 @@ def main():
     ap.add_argument("--refresh-days", type=int, default=45,
                     help="months overlapping the last N days are always re-downloaded")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--drop-grids", action="store_true",
+                    help="delete each monthly grid once its catchment means are cached")
     args = ap.parse_args()
     D = S["domains"][args.domain]
     cache = RAW / f"era5land_grid_{args.domain}"
     cache.mkdir(parents=True, exist_ok=True)
+    mcache = RAW / f"era5land_means_{args.domain}"
     out = ROOT / D["forcing"]
 
     init_ee()
@@ -159,9 +168,20 @@ def main():
     tr, shape = domain_grid(D["bbox"])
     log(f"{args.domain}: grid {shape[0]} x {shape[1]} cells of {RES} deg, {len(gdf)} catchments")
 
+    # monthly means are only valid for the catchments they were computed for
+    key = hashlib.sha1(b"".join(gdf.sort_values("gauge_id").geometry.to_wkb())
+                       + "|".join(sorted(gdf.gauge_id)).encode()).hexdigest()
+    if (mcache / "catchments.sha1").exists() and (mcache / "catchments.sha1").read_text() != key:
+        log("   catchments changed: monthly means cache discarded")
+        shutil.rmtree(mcache)
+    mcache.mkdir(parents=True, exist_ok=True)
+    (mcache / "catchments.sha1").write_text(key)
+
     months = pd.date_range(args.start, dt.date.today(), freq="MS").date
     refresh_from = pd.Timestamp(dt.date.today() - dt.timedelta(days=args.refresh_days)).replace(day=1).date()
-    todo = [m for m in months if m >= refresh_from or not (cache / f"{m:%Y-%m}.npz").exists()]
+    fresh = lambda m: m >= refresh_from  # noqa: E731
+    have = lambda m: (mcache / f"{m:%Y-%m}.parquet").exists() or (cache / f"{m:%Y-%m}.npz").exists()  # noqa: E731
+    todo = [m for m in months if fresh(m) or not have(m)]
     log(f"   {len(months)} months, {len(todo)} to download")
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         futs = [ex.submit(fetch_month, m, tr, shape, cache) for m in todo]
@@ -174,16 +194,24 @@ def main():
     W = catchment_weights(gdf, tr, shape)
     frames = []
     for m in months:
-        f = cache / f"{m:%Y-%m}.npz"
-        if not f.exists():
+        fm, fg = mcache / f"{m:%Y-%m}.parquet", cache / f"{m:%Y-%m}.npz"
+        if fm.exists() and not (fresh(m) and fg.exists()):
+            frames.append(pd.read_parquet(fm))
             continue
-        z = np.load(f)
+        if not fg.exists():
+            continue                                    # month not published yet
+        z = np.load(fg)
         dates = pd.to_datetime(z["dates"], format="%Y%m%d")
-        cols = {b: catchment_means(W, z[b]) for b in ALL}                  # each (days, n_catch)
+        cols = {b: catchment_means(W, z[b]).astype(np.float32) for b in ALL}      # each (days, n_catch)
         n_d, n_c = len(dates), len(gdf)
-        frames.append(pd.DataFrame({"date": np.repeat(dates, n_c), "gauge_id": np.tile(gdf.gauge_id.values, n_d),
-                                    **{b: cols[b].ravel() for b in ALL}}))
+        df = pd.DataFrame({"date": np.repeat(dates, n_c), "gauge_id": np.tile(gdf.gauge_id.values, n_d),
+                           **{b: cols[b].ravel() for b in ALL}})
+        df.to_parquet(fm, index=False)
+        frames.append(df)
+        if args.drop_grids:
+            fg.unlink()
     raw = pd.concat(frames, ignore_index=True).dropna(subset=["total_precipitation_sum"])
+    raw[ALL] = raw[ALL].astype(np.float64)
     forcing = to_units(raw).sort_values(["gauge_id", "date"]).reset_index(drop=True)
     missing = set(gdf.gauge_id) - set(forcing.gauge_id)
     if missing:
