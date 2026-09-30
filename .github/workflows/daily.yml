@@ -1,0 +1,57 @@
+# Daily river forecast: runs the operational chain (codes/run_daily.sh) and
+# publishes docs/ to GitHub Pages. Setup: see OPERATIONS.md.
+name: daily-forecast
+
+on:
+  schedule:
+    - cron: "30 13 * * *"      # 13:30 UTC: WeatherNext 3 00 UTC run complete (~7-13 h latency), AIFS long before
+  workflow_dispatch: {}        # manual "Run workflow" button
+
+permissions:
+  contents: write              # commit the updated site
+
+concurrency:
+  group: daily-forecast
+  cancel-in-progress: false
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash -el {0}    # login shell so the conda env is active
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          environment-name: hydrocat
+          cache-environment: true
+
+      - name: Install Google's model (pinned) and hydrocat
+        run: bash codes/00_setup_ci.sh
+
+      - name: Restore data caches (ACA open data, ERA5-Land grids, bridge days)
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/raw/aca_opendata
+            data/raw/era5land_grid_catalonia
+            data/forecasts/catalonia/bridge
+          key: data-${{ github.run_id }}
+          restore-keys: data-
+
+      - name: Run the daily chain
+        env:
+          EE_SERVICE_ACCOUNT_KEY: ${{ secrets.EE_SERVICE_ACCOUNT_KEY }}
+        run: bash codes/run_daily.sh
+
+      - name: Publish the site
+        run: |
+          git config user.name  "forecast-bot"
+          git config user.email "forecast-bot@users.noreply.github.com"
+          git add docs/
+          git commit -m "Forecast $(date -u +%Y-%m-%d)" || echo "nothing to commit"
+          git push

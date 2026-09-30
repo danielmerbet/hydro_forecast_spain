@@ -1,0 +1,9 @@
+regulated,model,KGE,NSE,logNSE,PBIAS,peak_err_pct
+False,google_baseline,-0.212,-0.256,-0.543,97.968,-11.235
+False,google_finetuned,0.31,0.3,0.503,-9.476,-59.328
+False,gr4j,0.527,0.344,-0.031,16.421,-23.433
+False,gr4j_emo1,0.454,0.375,0.021,16.487,-21.369
+True,google_baseline,-0.757,-3.52,-1.098,110.789,-25.819
+True,google_finetuned,0.476,0.356,0.42,10.606,-42.943
+True,gr4j,0.228,-0.565,-0.575,37.125,-38.535
+True,gr4j_emo1,0.302,-0.249,-0.253,37.177,-35.147

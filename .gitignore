@@ -1,0 +1,41 @@
+# ---- regenerable / large data (recreated by the numbered scripts) ----------
+data/raw/aca_opendata/
+data/raw/era5land/
+data/raw/era5land_grid_*/
+data/raw/era5land_spain/
+data/raw/emo1/
+data/raw/cedex/
+data/raw/aifs/
+data/interim/
+data/forecasts/
+data/processed/**/*.parquet
+data/processed/google/dynamics/
+data/processed/google/runs/
+data/processed/spain/*.gpkg
+external/
+
+# ---- large per-gauge figures and the phase-1 report bundle (rebuilt by 05b/08/09)
+outputs/figures/gauges/
+outputs/figures/gr4j/
+outputs/report/
+
+# ---- committed on purpose (needed by the daily GitHub Actions run) ----------
+# data/raw/aca_export/            ACA historical export (see its README)
+# data/processed/catchments.gpkg  Catalan catchments
+# data/processed/*.csv            stations, attributes, hypsometry, EMO-1 factors
+# data/processed/gr4j/**/parameters.csv
+# data/processed/google/statics/  Google model static attributes / targets
+# models/google_finetuned/        fine-tuned weights (13 MB)
+# docs/                           the published website
+
+# ---- python / tools ---------------------------------------------------------
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ---- secrets: never commit keys ----------------------------------------------
+*.json.key
+*-key.json
+*credentials*.json
+.env

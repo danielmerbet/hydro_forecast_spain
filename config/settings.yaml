@@ -1,0 +1,161 @@
+# =============================================================================
+# Central configuration. Every numbered script reads this file through
+# hydrocat.config.load_settings(); nothing below is hard-coded elsewhere.
+# =============================================================================
+
+# Google Cloud project registered for Earth Engine (and granted WeatherNext).
+ee_project: weathernext-reader-504807
+
+# Study domain: Catalonia's internal river basins (Conques Internes, managed by ACA)
+# lon_min, lat_min, lon_max, lat_max (WGS84). Slightly wider than Catalonia so
+# that catchments draining from France (Muga headwaters) are not truncated.
+bbox: [0.10, 40.45, 3.40, 42.95]
+
+# Spatial domains. "catalonia" = ACA internal basins (phase 1);
+# "spain" = every CEDEX gauge in mainland Spain (phase 1b).
+domains:
+  catalonia:
+    bbox: [0.10, 40.45, 3.40, 42.95]
+    stations: data/processed/stations.csv
+    catchments: data/processed/catchments.gpkg
+    flowdir: data/interim/hydrosheds_03dir.tif
+    forcing: data/processed/forcing_era5land.parquet
+  spain:
+    # Mainland Spain plus the French/Portuguese/Andorran strips that drain into it
+    bbox: [-9.60, 35.80, 3.50, 44.00]
+    stations: data/processed/spain/stations_cedex.csv
+    catchments: data/processed/spain/catchments.gpkg
+    flowdir: data/interim/hydrosheds_03dir_spain.tif
+    forcing: data/processed/spain/forcing_era5land.parquet
+
+# ---------------------------------------------------------------------------
+# Periods (inclusive, YYYY-MM-DD)
+# ---------------------------------------------------------------------------
+periods:
+  # GR4J runs start here; the 5 years up to calib_start only spin up the model
+  # stores and are never scored (forcing itself is extracted from 1981).
+  warmup_start: 2003-10-01
+  # GR4J calibration period. It ends on 2023-09-30 ON PURPOSE: Google's
+  # pretrained weights were trained on 1982-01-01 .. 2023-09-30, so the only
+  # fair, leakage-free window to compare the two models is AFTER that date.
+  calib_start: 2008-10-01
+  calib_end: 2023-09-30
+  # Common evaluation (test) period for GR4J vs Google. Open ended: "today"
+  # is replaced by the last date with ERA5-Land forcing available.
+  test_start: 2023-10-01
+  test_end: today
+
+# ---------------------------------------------------------------------------
+# Gauges (ACA)
+# ---------------------------------------------------------------------------
+gauges:
+  # Socrata dataset "Cabals dels rius a les conques internes de Catalunya"
+  # (5-min data, 2020 -> today) on the Catalan open-data portal.
+  socrata_url: https://analisi.transparenciacatalunya.cat/resource/3yr3-vq6y.json
+  # Historical daily export from ACA's "Consulta de dades del medi"
+  # (2007-01-01 -> 2024-10-20), shipped in data/raw/aca_export/ (see its README).
+  export_dir: data/raw/aca_export
+  # Socrata daily means are used from this date on (export used before it).
+  socrata_from: 2024-10-21
+  # Socrata 5-min data are downloaded from this date (the overlap with the
+  # export, 2023-10 .. 2024-10, is used to check that both sources agree).
+  socrata_download_start: 2023-10-01
+  # The open-data feed published litres/s (integers) until this date, despite
+  # the "m3/s" label; see codes/01_download_aca_gauges.py.
+  opendata_litres_before: 2026-05-14
+  # A day's mean is only kept when at least this fraction of 5-min values exist.
+  min_daily_coverage: 0.75
+  # Runs of this many (or more) identical non-zero daily means are removed as
+  # infilled data (see script 01).
+  max_flat_run_days: 5
+  # CEDEX Anuario values are rounded to 2-3 decimals and already quality-checked
+  # by CEDEX, so repeats at low flow are genuine; only very long runs are removed.
+  max_flat_run_days_cedex: 90
+  # Keep a gauge for modelling only if it has at least this many valid days
+  # in the calibration period AND in the test period.
+  min_days_calib: 1825       # 5 years
+  min_days_test: 365         # 1 year
+  # Only river gauges ("Aforament"); reservoir outflows (E-codes) are used as
+  # regulation markers, not as modelling targets.
+  include_reservoir_outflows: false
+
+# ---------------------------------------------------------------------------
+# Catchment delineation (HydroSHEDS 3 arc-second flow directions, via Earth Engine)
+# ---------------------------------------------------------------------------
+catchments:
+  flowdir_asset: WWF/HydroSHEDS/03DIR
+  # Gauges are snapped to the highest-accumulation cell within this radius
+  # (m), unless config/gauge_overrides.csv says otherwise.
+  snap_radius_m: 300
+  snap_radius_official_m: 750   # when ACA publishes the drained area (area-matched snapping)
+  min_area_km2: 10
+
+# ---------------------------------------------------------------------------
+# Forcing (ERA5-Land daily aggregates, catchment means, via Earth Engine)
+# ---------------------------------------------------------------------------
+forcing:
+  era5land_asset: ECMWF/ERA5_LAND/DAILY_AGGR
+  reduce_scale_m: 1000       # sampling scale for area-weighted catchment means
+  # Precipitation correction applied by hydrocat.forcing.load_forcing:
+  #   none                  raw ERA5-Land
+  #   emo1_monthly_scaling  ERA5-Land x monthly factor per catchment so that its
+  #                         2003-2024 climatology matches the gauge-based EMO-1
+  #                         (scripts 03b-03d). ERA5-Land is +29 % wetter than
+  #                         EMO-1 in the median ACA catchment.
+  precip_correction: emo1_monthly_scaling
+
+# ---------------------------------------------------------------------------
+# GR4J + CemaNeige calibration
+# ---------------------------------------------------------------------------
+gr4j:
+  # kge_sqrt = mean of KGE(Q) and KGE(sqrt Q): peaks still dominate, but low
+  # flows get weight. Plain KGE(Q) drove the groundwater-exchange parameter to
+  # its bound at 9 gauges and collapsed baseflow (see README, section 6).
+  objective: kge_sqrt       # kge | nse | kge_sqrt
+  n_elevation_layers: 5     # CemaNeige elevation bands
+  # Snow module is calibrated only where snow matters; elsewhere CemaNeige
+  # runs with default parameters (it then does almost nothing).
+  snow_if_max_elev_m: 1200
+  default_snow_params: [0.25, 3.74]   # CTG [-], Kf [mm/degC/day] (airGR medians)
+  # Zero flow (intermittent rivers). GR4J's stores only empty asymptotically,
+  # so it never produces Q = 0. Per gauge (script 05):
+  #  * observed zero:  Q_obs < obs_zero_m3s (ACA reports m3/s with 3 decimals)
+  #  * intermittent:   >= min_zero_days_per_year observed zero days per year on
+  #                    average in the calibration period (non-perennial
+  #                    definition of Messager et al., 2021, Nature 594, 391-397)
+  #  * threshold q0:   the simulated flow whose non-exceedance frequency over the
+  #                    calibration period equals the observed zero-flow frequency;
+  #                    Q_sim < q0 is set to 0. Perennial gauges: only the
+  #                    obs_zero_m3s resolution floor is applied.
+  zero_flow:
+    obs_zero_m3s: 0.001
+    min_zero_days_per_year: 1
+    # a zero spell counts only if the flow before it was < this x median flow
+    drying_fraction: 0.1
+  bounds:
+    X1: [10.0, 3000.0]      # production store capacity [mm]
+    X2: [-10.0, 5.0]        # groundwater exchange coefficient [mm/day]
+    X3: [10.0, 1000.0]      # routing store capacity [mm]; <10 mm gives a degenerate, spiky model
+    X4: [0.5, 10.0]         # unit hydrograph time base [days]
+    CTG: [0.0, 1.0]         # CemaNeige snowpack thermal-state weighting [-]
+    Kf: [0.0, 10.0]         # CemaNeige degree-day melt factor [mm/degC/day]
+  optimizer:
+    maxiter: 300
+    popsize: 20
+    seed: 42
+    workers: 14
+
+# ---------------------------------------------------------------------------
+# Google hydrology model (OpenHydroNet / googlehydrology)
+# ---------------------------------------------------------------------------
+google:
+  repo_dir: external/flood-forecasting
+  # Both released runs are evaluated; "filtered" = trained only on basins with
+  # NSE > 0.5 in the baseline run (Google's recommended starting point).
+  pretrained_runs:
+    baseline: pretrained-models/google-floodhub-settings-55-epochs
+    filtered: pretrained-models/google-floodhub-settings-55-epochs-nse-filtered-0.5-85-epochs
+  # Lead time (days) whose output is used as the "simulation" in the
+  # comparison with GR4J. With reanalysis forcing at every lead, lead 0 is the
+  # model's nowcast, i.e. the analogue of a continuous GR4J simulation.
+  simulation_lead: 0

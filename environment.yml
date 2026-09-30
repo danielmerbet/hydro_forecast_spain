@@ -1,0 +1,57 @@
+# Conda environment for the whole pipeline (calibration, Google model, forecasts, web).
+#
+#   conda env create -f environment.yml
+#   conda activate hydrocat
+#   bash codes/00_setup.sh          # clones Google's model at a pinned commit and pip-installs it
+#
+# Versions of the scientific core are pinned to the ranges used by Google's
+# flood-forecasting repo (external/flood-forecasting/environments/environment_cpu.yml)
+# so their pretrained weights load exactly as intended.
+name: hydrocat
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.12.*
+  # --- Google hydrology framework (OpenHydroNet / googlehydrology) ---------
+  - pytorch=2.5.*
+  - cpuonly
+  - absl-py=2.3.*
+  - bokeh=3.8.*
+  - cachey=0.2.*
+  - dask=2025.12.*
+  - gcsfs=2025.12.*
+  - h5netcdf=1.7.*
+  - netcdf4=1.7.*
+  - more-itertools=10.8.*
+  - pydantic=2.12.*
+  - ruamel.yaml=0.18.*
+  - tensorboard=2.20.*
+  - tqdm=4.67.*
+  - xarray=2025.12.*
+  - zarr=3.1.*
+  - numpy=2.*
+  - pandas=2.3.*
+  - scipy=1.16.*
+  # --- geospatial / catchments ---------------------------------------------
+  - geopandas=1.1.*
+  - rasterio
+  - pyproj
+  - shapely
+  - pysheds
+  # --- hydrology / calibration ---------------------------------------------
+  - numba
+  # --- weather data ---------------------------------------------------------
+  - earthengine-api
+  - cfgrib
+  - eccodes
+  - requests
+  # --- plots / web ----------------------------------------------------------
+  - matplotlib=3.10.*
+  - plotly
+  - pyarrow
+  - pyyaml
+  - pytest
+  - pip
+  - pip:
+      - ecmwf-opendata
