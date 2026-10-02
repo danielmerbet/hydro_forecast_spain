@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>River Forecast Spain</title>
 <link rel="icon" href="data:,">
-<meta name="description" content="Daily 15-day river discharge forecasts for Spain's river gauges: GR4J and Google's hydrology model driven by WeatherNext 3 and ECMWF AIFS.">
+<meta name="description" content="Daily 14-15-day river discharge forecasts for Spain's river gauges: GR4J and Google's hydrology model driven by WeatherNext 3 and ECMWF AIFS.">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
@@ -63,7 +63,7 @@ thead th { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing
 <header>
   <h1>River Forecast Spain</h1>
   <span class="issued" id="issued">loading…</span>
-  <span class="sub">15-day daily discharge · GR4J and Google's hydrology model · WeatherNext 3 and ECMWF AIFS</span>
+  <span class="sub">14–15-day daily discharge · GR4J and Google's hydrology model · WeatherNext 3 and ECMWF AIFS</span>
 </header>
 <main>
   <div id="map" role="region" aria-label="Map of river gauges"></div>
@@ -191,7 +191,7 @@ function renderList(ids) {
 fetch("data/latest.json").then(r => r.json()).then(d => {
   DATA = d;
   const noWn3 = Object.entries(d.meta.domains || {}).filter(([k, m]) => !m.weathernext3).map(([k]) => k);
-  document.getElementById("issued").textContent = `Forecast issued ${d.meta.issued} (runs ${d.meta.init.slice(0, 8)} 00 UTC)`
+  document.getElementById("issued").textContent = `Forecast from ${d.meta.issued} (weather runs of ${d.meta.init.slice(0, 4)}-${d.meta.init.slice(4, 6)}-${d.meta.init.slice(6, 8)} ${d.meta.init.slice(8, 10)} UTC)`
     + (noWn3.length ? ` · WeatherNext 3 not available today${noWn3.length < Object.keys(d.meta.domains).length ? " for " + noWn3.join(", ") : ""}: AIFS only` : "");
   map = L.map("map", {zoomControl: true, preferCanvas: true}).setView([40.3, -3.6], 6);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 13, attribution: "© OpenStreetMap"}).addTo(map);

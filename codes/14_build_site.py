@@ -128,8 +128,8 @@ def domain_info(domain) -> tuple[pd.DataFrame, dict]:
 def build_domain(domain):
     fdir = DATA / "forecasts" / domain
     init = sorted(p.name for p in (fdir / "gr4j").iterdir())[-1]
-    d0 = pd.Timestamp(dt.datetime.strptime(init, "%Y%m%d%H").date())
     gr = pd.read_parquet(fdir / "gr4j" / init / "q_forecast.parquet")
+    d0 = gr.date.min()                          # first forecast day (00 UTC run: init date; 12 UTC: next day)
     gf = fdir / "google" / init / "q_forecast.parquet"
     go = pd.read_parquet(gf) if gf.exists() else pd.DataFrame(columns=["gauge_id", "product", "date"])
     products = set(gr["product"])

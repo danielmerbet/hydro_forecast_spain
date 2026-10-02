@@ -115,8 +115,10 @@ def main():
     base = PROCESSED if args.domain == "catalonia" else PROCESSED / args.domain
     fdir = DATA / "forecasts" / args.domain
     init = args.init or sorted(p.name for p in (fdir / "aifs").iterdir())[-1]        # AIFS is required
-    d0 = pd.Timestamp(dt.datetime.strptime(init, "%Y%m%d%H").date())
-    log(f"GR4J forecast, runs of {init}, domain {args.domain}")
+    aifs = pd.read_parquet(fdir / "aifs" / init / "forcing.parquet")
+    fc_dates = pd.DatetimeIndex(sorted(aifs.date.unique()))              # 15 days (00 UTC run) or 14 (12 UTC)
+    d0 = fc_dates[0]                                                      # first forecast day
+    log(f"GR4J forecast, runs of {init}, domain {args.domain}, {d0.date()} .. {fc_dates[-1].date()}")
 
     rawdir = base / "gr4j" / "run_era5l_raw"
     par = pd.read_csv((rawdir if rawdir.exists() else base / "gr4j") / "parameters.csv").set_index("gauge_id")
@@ -142,8 +144,6 @@ def main():
     H = grid(past, past_dates)
     if np.isnan(H["total_precipitation"]).any():
         raise RuntimeError("gaps in the ERA5-Land + bridge forcing before the forecast start")
-    fc_dates = pd.date_range(d0, periods=15, freq="D")
-    aifs = pd.read_parquet(fdir / "aifs" / init / "forcing.parquet")
     wf = fdir / "weathernext3" / init / "forcing.parquet"
     scen = {"aifs": grid(aifs, fc_dates)}
     if wf.exists():

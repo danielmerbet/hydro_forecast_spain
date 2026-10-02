@@ -1,6 +1,6 @@
 # Daily operation — GitHub Actions + GitHub Pages
 
-Every day at 13:30 UTC the workflow `.github/workflows/daily.yml` runs
+Every day at 02:17 UTC (04:17 in Spain in summer, 03:17 in winter) the workflow `.github/workflows/daily.yml` runs
 `codes/run_daily.sh` on a GitHub runner and commits the rebuilt website in
 `docs/`, which GitHub Pages serves.
 
@@ -20,8 +20,14 @@ Every day at 13:30 UTC the workflow `.github/workflows/daily.yml` runs
 A failure in any Spain step only drops Spain from that day's site (yellow
 warning in the workflow); Catalonia failures stop the run.
 
-Why 13:30 UTC: WeatherNext 3 00 UTC runs are complete in Earth Engine
-~7–13 h after initialisation; AIFS 00 UTC is available from ~07 UTC.
+Why 02:17 UTC (changed from 13:30 UTC on 2026-10-02): the forecast is online
+before the working day. At that hour the newest complete runs are the previous
+day's **12 UTC** runs (AIFS 12 UTC is published by ~19 UTC; WeatherNext 3 runs
+are complete in Earth Engine ~7–13 h after initialisation), so the forecast
+covers 14 full days starting today (a 00 UTC run would give 15 days but is
+only ready after ~07 UTC for AIFS and ~13 UTC for WeatherNext 3). GitHub does
+not guarantee the start time of scheduled runs: at 13:30 UTC they started
+~5 h late; the minute :17 avoids the busiest full hour.
 
 ## One-time setup
 

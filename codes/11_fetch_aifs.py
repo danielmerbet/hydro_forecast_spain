@@ -12,8 +12,12 @@ SOURCE — ECMWF open data (CC BY 4.0, attribute ECMWF), no key needed:
                job, while rain-only daily steps are ~0.6 GB and carry the
                uncertainty that matters most for floods.
 
-DAILY AGGREGATION (UTC days k = 0..14 after the 00 UTC init)
-  tp, ssrd   accumulated from init -> field(24k+24) - field(24k)
+RUNS: the latest 00 or 12 UTC run (both have the 15-day range and the
+  ensemble), or --date. Forecast hours are grouped into complete UTC calendar
+  days (hydrocat.fcdays): 15 days for a 00 UTC run, 14 days for a 12 UTC run
+  (which starts on the next day); day d = forecast hours (a, b].
+DAILY AGGREGATION
+  tp, ssrd   accumulated from init -> field(b) - field(a)
   2t, 2d, sp, wind speed  mean of the four 6-hourly instants 24k+6 .. 24k+24;
              Tmin/Tmax = min/max of those four instants (coarser than hourly
              data: an approximation, used only for FAO-56 PET and snow).
@@ -49,6 +53,7 @@ import xarray as xr
 from affine import Affine
 
 from hydrocat.config import DATA, PROCESSED, RAW, ROOT, load_settings
+from hydrocat.fcdays import day_windows, parse_init, snap_to_run
 from hydrocat.gridweights import catchment_means, catchment_weights
 from hydrocat.pet import fao56_net_radiation, fao56_penman_monteith
 
@@ -115,20 +120,21 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--domain", default="catalonia", choices=list(S["domains"]))
     ap.add_argument("--no-ens", action="store_true", help="skip the AIFS ensemble precipitation")
-    ap.add_argument("--date", default=None, help="YYYY-MM-DD: the 00 UTC run of that day (default: latest)")
-    ap.add_argument("--days", type=int, default=15, help="forecast days to process (1 = day 0 only)")
+    ap.add_argument("--date", default=None,
+                    help="run: YYYY-MM-DD (00 UTC), YYYYMMDDHH or YYYY-MM-DDTHH (default: latest 00/12 UTC)")
+    ap.add_argument("--days", type=int, default=15, help="max forecast days (1 = first complete day only)")
     ap.add_argument("--out", default=None, help="output root (default data/forecasts/<domain>/aifs)")
     args = ap.parse_args()
     D = S["domains"][args.domain]
-    DAYS = args.days
     if args.date:
-        init = dt.datetime.fromisoformat(args.date)
+        init = parse_init(args.date)
         recent = (dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) - init).days <= 3
         sources = ["ecmwf", "google", "aws"] if recent else ["google", "aws"]   # ECMWF keeps ~4 days
     else:
         sources = ["ecmwf", "google", "aws"]
-        init = client("ecmwf", "aifs-single").latest(param="tp", step=360)
-        init = init.replace(hour=0) if init.hour else init                  # the day's 00 UTC run
+        init = snap_to_run(client("ecmwf", "aifs-single").latest(param="tp", step=360))  # 00/12 UTC run
+    windows = day_windows(init, args.days)
+    DAYS = len(windows)
     cache = RAW / "aifs" / init.strftime("%Y%m%d%H")
     cache.mkdir(parents=True, exist_ok=True)
     root = Path(args.out) if args.out else DATA / "forecasts" / args.domain / "aifs"
@@ -137,12 +143,12 @@ def main():
     log(f"AIFS run {init:%Y-%m-%d %H} UTC, {DAYS} days, domain {args.domain}")
     used = set()
 
-    steps = list(range(0, 24 * DAYS + 1, 6))
+    steps = list(range(windows[0][1], windows[-1][2] + 1, 6))
     fields = {}
     for p in PARAMS:
         f = cache / f"single_{p}_{DAYS}d.grib2"
         if not f.exists():
-            used.add(fetch(sources, "aifs-single", f, date=init.date(), time=0, step=steps, param=p))
+            used.add(fetch(sources, "aifs-single", f, date=init.date(), time=init.hour, step=steps, param=p))
         fields[p] = crop(open_param(f, p), D["bbox"])
     tr, shape = grid_of(fields["tp"])
     gdf = gpd.read_file(ROOT / D["catchments"])
@@ -157,9 +163,8 @@ def main():
     tp = to_mm(fields["tp"])
     daily = {k: [] for k in ["tp", "ssrd", "t", "tmin", "tmax", "td", "ws", "sp"]}
     ws = np.hypot(fields["10u"], fields["10v"])
-    for k in range(DAYS):
-        h0, h1 = 24 * k, 24 * k + 24
-        inst = [24 * k + 6, 24 * k + 12, 24 * k + 18, 24 * k + 24]
+    for _, h0, h1 in windows:
+        inst = [h0 + 6, h0 + 12, h0 + 18, h1]
         daily["tp"].append(np.clip(at(tp, h1) - at(tp, h0), 0, None))
         daily["ssrd"].append(np.clip(at(fields["ssrd"], h1) - at(fields["ssrd"], h0), 0, None))
         t = np.stack([at(fields["2t"], h) for h in inst])
@@ -169,7 +174,7 @@ def main():
         daily["sp"].append(np.mean([at(fields["sp"], h) for h in inst], 0))
     m = {k: cm(np.stack(v)) for k, v in daily.items()}
 
-    dates = pd.date_range(init.date(), periods=DAYS, freq="D")
+    dates = pd.to_datetime([d for d, _, _ in windows])
     n_c = len(gdf)
     base = PROCESSED if args.domain == "catalonia" else PROCESSED / args.domain
     elev = gdf.gauge_id.map(pd.read_csv(base / "hypsometry.csv").set_index("gauge_id")["p50"]).values
@@ -195,16 +200,17 @@ def main():
     if not args.no_ens:
         fe = cache / f"ens_tp_{DAYS}d.grib2"
         if not fe.exists():
-            used.add(fetch(sources, "aifs-ens", fe, date=init.date(), time=0, type="pf",
-                           step=list(range(0, 24 * DAYS + 1, 24)), number=list(range(1, 51)), param="tp"))
+            used.add(fetch(sources, "aifs-ens", fe, date=init.date(), time=init.hour, type="pf",
+                           step=sorted({h for _, a, b in windows for h in (a, b)}), number=list(range(1, 51)),
+                           param="tp"))
         da = crop(to_mm(open_param(fe, "tp")), D["bbox"])
         tr_e, shape_e = grid_of(da)
         We = W if shape_e == shape else catchment_weights(gdf, tr_e, shape_e)
         rows = []
         for num in da.number.values:
             acc = da.sel(number=num)
-            dd = np.stack([np.clip(acc.sel(step=pd.Timedelta(hours=24 * k + 24)).values
-                                   - acc.sel(step=pd.Timedelta(hours=24 * k)).values, 0, None) for k in range(DAYS)])
+            dd = np.stack([np.clip(acc.sel(step=pd.Timedelta(hours=b)).values
+                                   - acc.sel(step=pd.Timedelta(hours=a)).values, 0, None) for _, a, b in windows])
             mm = catchment_means(We, dd)
             rows.append(pd.DataFrame({"date": np.repeat(dates, n_c), "gauge_id": np.tile(gdf.gauge_id.values, DAYS),
                                       "member": int(num), "total_precipitation": mm.ravel()}))

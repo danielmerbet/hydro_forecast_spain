@@ -7,10 +7,12 @@
 #   01c  SAIH Ebro, Júcar, Guadalquivir, Segura: last 10 days (GR4J state updating)
 #   03   ERA5-Land forcing 2003 -> today-7d, both domains (monthly catchment
 #        means cached; grids deleted once averaged)
-#   10   WeatherNext 3, latest complete 00 UTC run (Earth Engine) — OPTIONAL:
-#        any failure (no access yet: exit 3, no complete run, EE error) -> AIFS only
-#   11   ECMWF AIFS 00 UTC run (open data) + 50-member ensemble rain
-#        (global files downloaded once, cropped for each domain)
+#   11   ECMWF AIFS, latest 00/12 UTC run (open data) + 50-member ensemble rain
+#        (global files downloaded once, cropped for each domain). Its run time
+#        ($INIT) is used for every product. At the 02:17 UTC schedule this is
+#        the previous day's 12 UTC run -> 14 forecast days from today.
+#   10   WeatherNext 3, the same run (Earth Engine) — OPTIONAL:
+#        any failure (no access yet: exit 3, run not complete, EE error) -> AIFS only
 #   12   GR4J forecasts (bridge days, state updating, all forcings)
 #   13   Google model forecasts (Catalonia: released + fine-tuned; Spain: released)
 #   14   website in docs/ (+ 30 days of run archives)
@@ -30,17 +32,19 @@ for b in ebro jucar guadalquivir segura; do
 done
 
 python codes/03_extract_era5land_forcing.py --domain catalonia --start 2003-01-01 --drop-grids
-python codes/10_fetch_weathernext3.py --domain catalonia \
-  || warn "WeatherNext 3 not available today - publishing AIFS-based forecasts only"
 python codes/11_fetch_aifs.py --domain catalonia
+INIT=$(ls data/forecasts/catalonia/aifs | sort | tail -n 1)              # YYYYMMDDHH of the AIFS run
+echo "weather run: $INIT"
+python codes/10_fetch_weathernext3.py --domain catalonia --init "$INIT" \
+  || warn "WeatherNext 3 not available today - publishing AIFS-based forecasts only"
 python codes/12_run_gr4j_forecast.py --domain catalonia     # may fetch AIFS day 0 of past runs (bridge)
 python codes/13_run_google_forecast.py --domain catalonia
 
 # inside a function called from `if`, set -e is off: every step checks itself
 spain() {
   python codes/03_extract_era5land_forcing.py --domain spain --start 2003-01-01 --drop-grids || return 1
-  python codes/10_fetch_weathernext3.py --domain spain || warn "WeatherNext 3 (Spain) not available today"
-  python codes/11_fetch_aifs.py --domain spain || return 1
+  python codes/11_fetch_aifs.py --domain spain --date "$INIT" || return 1
+  python codes/10_fetch_weathernext3.py --domain spain --init "$INIT" || warn "WeatherNext 3 (Spain) not available today"
   python codes/12_run_gr4j_forecast.py --domain spain || return 1
   python codes/13_run_google_forecast.py --domain spain || warn "Google model (Spain) failed today"
 }

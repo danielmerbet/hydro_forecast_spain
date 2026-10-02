@@ -4,7 +4,10 @@ name: daily-forecast
 
 on:
   schedule:
-    - cron: "30 13 * * *"      # 13:30 UTC: WeatherNext 3 00 UTC run complete (~7-13 h latency), AIFS long before
+    # 02:17 UTC = 04:17 in Spain in summer (CEST), 03:17 in winter (CET); GitHub cron is UTC only.
+    # Uses the previous day's 12 UTC runs (AIFS out by ~19 UTC, WeatherNext 3 complete ~7-13 h after
+    # init). Off the full hour on purpose: GitHub delays scheduled runs most at :00.
+    - cron: "17 2 * * *"
   workflow_dispatch: {}        # manual "Run workflow" button
 
 permissions:

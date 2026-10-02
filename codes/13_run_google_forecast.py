@@ -43,7 +43,6 @@ Writes  data/forecasts/<domain>/google/<init>/q_forecast.parquet
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import importlib.util
 import shutil
 import subprocess
@@ -89,7 +88,7 @@ def main():
     args = ap.parse_args()
     fdir = DATA / "forecasts" / args.domain
     init = args.init or sorted(p.name for p in (fdir / "aifs").iterdir())[-1]        # AIFS is required
-    D0 = pd.Timestamp(dt.datetime.strptime(init, "%Y%m%d%H").date())
+    D0 = pd.read_parquet(fdir / "aifs" / init / "forcing.parquet", columns=["date"]).date.min()  # first forecast day
     I = D0 - pd.Timedelta(days=1)                                              # issue date
     work = fdir / "google" / init
     inp = work / "input"

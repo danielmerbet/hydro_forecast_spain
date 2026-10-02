@@ -12,8 +12,10 @@ SOURCE
   gs://weathernext3_spatial (needs a billing account; not used).
 
 WHAT IS COMPUTED
-  The latest fully published 00 UTC run (all 360 hours present) is taken.
-  Hours (24k, 24k+24] after the init form forecast day k = 0..14 (UTC days),
+  The latest fully published 00 or 12 UTC run (all 360 hours present) is
+  taken, or the run given by --init (run_daily.sh passes the AIFS run, so both
+  products share one init). Forecast hours are grouped into complete UTC
+  calendar days (hydrocat.fcdays: 15 days for a 00 UTC run, 14 for 12 UTC),
   aggregated server-side, downloaded as one small grid and turned into
   catchment means with the same area weights as ERA5-Land (the two products
   share the same 0.1 deg grid):
@@ -54,12 +56,12 @@ from rasterio.io import MemoryFile
 
 from hydrocat.config import DATA, PROCESSED, ROOT, load_settings
 from hydrocat.eeutils import init_ee, retry
+from hydrocat.fcdays import RUN_HOURS, day_windows, parse_init
 from hydrocat.gridweights import catchment_means, catchment_weights
 from hydrocat.pet import fao56_net_radiation, fao56_penman_monteith, pressure_from_elevation
 
 S = load_settings()
 ASSET = "projects/gcp-public-data-weathernext/assets/weathernext_3_0_0_0p1deg"
-DAYS = 15
 AGG = [  # (output band, source band, reducer)
     ("tp", "total_precipitation_1hr_mean", "sum"),
     ("tp_p10", "total_precipitation_1hr_p10", "sum"),
@@ -77,22 +79,26 @@ def log(*a):
     print(*a, flush=True)
 
 
+def complete(col, t: dt.datetime) -> bool:
+    return retry(col.filter(ee.Filter.eq("start_time", t.strftime("%Y-%m-%dT%H:%M:%SZ")))
+                 .filter(ee.Filter.eq("forecast_hour", 360)).size().getInfo) > 0
+
+
 def latest_init(col) -> dt.datetime:
     now = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0, tzinfo=None)
-    for back in range(0, 24 * 5, 24):
-        t = (now - dt.timedelta(hours=back)).replace(hour=0)
-        n = retry(col.filter(ee.Filter.eq("start_time", t.strftime("%Y-%m-%dT%H:%M:%SZ")))
-                  .filter(ee.Filter.eq("forecast_hour", 360)).size().getInfo)
-        if n:
+    for back in range(0, 24 * 5, 12):
+        t = now - dt.timedelta(hours=back)
+        t = t.replace(hour=max(h for h in RUN_HOURS if h <= t.hour))
+        if complete(col, t):
             return t
-    raise RuntimeError("no complete WeatherNext 3 00 UTC run in the last 5 days")
+    raise RuntimeError("no complete WeatherNext 3 00/12 UTC run in the last 5 days")
 
 
-def daily_stack(col, init: dt.datetime) -> ee.Image:
+def daily_stack(col, init: dt.datetime, windows) -> ee.Image:
     run = col.filter(ee.Filter.eq("start_time", init.strftime("%Y-%m-%dT%H:%M:%SZ")))
     imgs = []
-    for k in range(DAYS):
-        day = run.filter(ee.Filter.rangeContains("forecast_hour", 24 * k + 1, 24 * k + 24))
+    for k, (_, a, b) in enumerate(windows):
+        day = run.filter(ee.Filter.rangeContains("forecast_hour", a + 1, b))
         bands = []
         for name, src, red in AGG:
             c = day.select(src)
@@ -118,7 +124,8 @@ def available() -> bool:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--domain", default="catalonia", choices=list(S["domains"]))
-    ap.add_argument("--init", default=None, help="YYYY-MM-DD (00 UTC run); default: latest complete")
+    ap.add_argument("--init", default=None,
+                    help="run: YYYYMMDDHH, YYYY-MM-DD (00 UTC) or YYYY-MM-DDTHH; default: latest complete 00/12 UTC")
     args = ap.parse_args()
     D = S["domains"][args.domain]
     if not available():
@@ -126,12 +133,16 @@ def main():
         sys.exit(3)
     col = ee.ImageCollection(ASSET)
     try:
-        init = dt.datetime.fromisoformat(args.init) if args.init else latest_init(col)
+        init = parse_init(args.init) if args.init else latest_init(col)
+        if args.init and not complete(col, init):
+            raise RuntimeError(f"run {init:%Y-%m-%d %H} UTC not complete in Earth Engine yet")
     except RuntimeError as e:
         log(f"WeatherNext 3 skipped: {e}")
         sys.exit(3)
     out = DATA / "forecasts" / args.domain / "weathernext3" / init.strftime("%Y%m%d%H")
     out.mkdir(parents=True, exist_ok=True)
+    windows = day_windows(init)
+    DAYS = len(windows)
     log(f"WeatherNext 3 run {init:%Y-%m-%d %H} UTC, {DAYS} days, domain {args.domain}")
 
     # same grid as ERA5-Land (0.1 deg, cell centres on whole tenths): reuse script 03's grid
@@ -141,7 +152,7 @@ def main():
     spec.loader.exec_module(s03)
     tr, (ny, nx) = s03.domain_grid(D["bbox"])
     raw = retry(ee.data.computePixels, {
-        "expression": daily_stack(col, init), "fileFormat": "GEO_TIFF",
+        "expression": daily_stack(col, init, windows), "fileFormat": "GEO_TIFF",
         "grid": {"dimensions": {"width": nx, "height": ny},
                  "affineTransform": {"scaleX": tr.a, "shearX": 0, "translateX": tr.c,
                                      "shearY": 0, "scaleY": tr.e, "translateY": tr.f},
@@ -154,7 +165,7 @@ def main():
     gdf = gpd.read_file(ROOT / D["catchments"])
     W = catchment_weights(gdf, tr, (ny, nx))
     m = {name: catchment_means(W, a[:, i]) for i, (name, _, _) in enumerate(AGG)}   # (days, n_catch)
-    dates = pd.date_range(init.date(), periods=DAYS, freq="D")
+    dates = pd.to_datetime([d for d, _, _ in windows])
     base = PROCESSED if args.domain == "catalonia" else PROCESSED / args.domain
     hy = pd.read_csv(base / "hypsometry.csv").set_index("gauge_id")
     elev = gdf.gauge_id.map(hy["p50"]).values
